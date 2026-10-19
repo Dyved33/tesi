@@ -297,11 +297,7 @@ Fino a quando la trasmissione non è pronta, i dati restano **solo in locale**.
 
 ---
 
-## 8. Chiarimenti (risposte alle tue domande)
-
-### LED / buzzer di stato (domanda 13)
-
-Intendevo un indicatore fisico sul Pi (LED o cicalino) per capire outdoor se è acceso, in cattura, in errore, ecc. **Non è un requisito** al momento: si può aggiungere dopo se serve in campo.
+## 8. Specifiche
 
 ### Framework per programmare l’ESP32 (domanda 25) — scelta
 
@@ -312,78 +308,11 @@ Intendevo un indicatore fisico sul Pi (LED o cicalino) per capire outdoor se è 
 | **ESP-IDF**    | Ufficiale Espressif; più potente, curva più ripida |
 | **MicroPython**| Python sulla scheda; rapido da prototipare, meno tipico per produzione |
 
-**Scelta consigliata per questa tesi: PlatformIO.**
+**Scelta proposta: PlatformIO.**
 
 Motivi: riusa l’ecosistema librerie Arduino (utile per ESP32-CAM), tiene il progetto in cartelle versionabili nel repo Git, fissa le versioni di framework/librerie (riproducibilità), si integra bene con VS Code / Cursor. Arduino IDE va bene per prove lampo; ESP-IDF solo se servono API low-level avanzate.
 
-### Deep sleep sull’ESP32 (domanda 26)
-
-Con **deep sleep** l’ESP32 spegne quasi tutto e consuma pochissimo, svegliandosi solo a intervalli o su interrupt. Utile a batteria; complica camera, Wi‑Fi e timing del wake.
-
-**Stato decisione: non ancora deciso.**
-
-### “Grandezze” dei sensori (domanda 28)
-
-Era solo la domanda: *cosa misura ciascun sensore?* Ora compilata in §4.4 (umidità suolo, acqua, P/T, metano, posizione).
-
-### Pipeline automatica al boot / systemd (domanda 34)
-
-Su Linux, un **servizio systemd** può avviare automaticamente allo startup lo script di cattura/sensori, così dopo il wake del Pi non serve login manuale.
-
-**Decisione: sì** — da implementare quando la pipeline di cattura sarà stabile.
-
-### Linguaggio sul Pi (domanda 35)
-
-Dipende dal sensore/libreria: tipicamente **Python** per I2C/SPI/GPIO e orchestrazione; **bash** per wrapper (`rpicam-still`, shutdown); C/C++ solo se serve performance (vision). Misto è normale.
-
-### Privacy immagini (domanda 39)
-
-In outdoor agricolo il rischio persone in foto è basso ma non nullo. Possibilità tipiche:
-
-- inquadrare solo suolo/piante;
-- non caricare cloud senza accordo;
-- anonimizzare / non salvare dati personali;
-- documentare retention (quanto a lungo tieni le JPG).
-
-**Storage attuale: solo locale.** Trasmissione verso altro device in seguito, con gestione corruzione (§7.1). Privacy foto: inquadrare suolo/piante dove possibile; retention da documentare.
-
----
-
-## 9. Privacy, sicurezza e buone pratiche
-
-- Non committare password, chiavi SSH private, token Raspberry Pi Connect o Wi‑Fi in chiaro.
-- Outdoor: protezione IP/scatola stagna, condensazione, cavi alimentazione condivisa Pi ↔ ESP32.
-- Segnale wake GPIO: livelli 3.3 V, debounce, eventuale MOSFET/relè se si taglia il 5 V; valutare anche l’**interruttore temporizzato**.
-- Recovery: timeout se il Pi non completa il ciclo; evitare che resti acceso a vuoto in batteria.
-- Trasferimenti: non cancellare i file locali finché l’integrità lato destinazione non è verificata.
-
----
-
-## 10. Roadmap
-
-1. Fissare **shutdown vs sleep** e schema wake (GPIO ESP32-CAM e/o **interruttore temporizzato**).
-2. Firmware minimo ESP32-CAM con **PlatformIO** (wake + handshake “done”; deep sleep TBD).
-3. **systemd** per job automatici al boot + sensori sul Pi uno alla volta + logging locale.
-4. Integrazione completa evento → foto + telemetria → spegnimento.
-5. Trasmissione verso altro device con **anti-corruzione** (hash, retry, resume).
-6. Computer vision / soglie; misure consumo; test `stress-ng`.
-7. Schemi + BOM in repo; scrittura tesi entro primavera.
-
----
-
-## 11. Riferimenti
-
-- Paper locale: [`main.pdf`](./main.pdf)
-- [Raspberry Pi Documentation](https://www.raspberrypi.com/documentation/)
-- [Camera Module 3](https://www.raspberrypi.com/documentation/accessories/camera.html) — 4608×2592, IMX708
-- [rpicam-still / libcamera](https://www.raspberrypi.com/documentation/computers/camera.html)
-- [Raspberry Pi Connect](https://www.raspberrypi.com/documentation/services/connect.html)
-- [ESP32-CAM (Espressif / moduli AI Thinker)](https://docs.espressif.com/)
-- Relatore: Francesco Betti Sorbelli — Università di Perugia
-
----
-
-## 12. Changelog documentazione
+## 9. Changelog documentazione
 
 | Data       | Modifica |
 |------------|----------|
