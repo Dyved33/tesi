@@ -15,7 +15,6 @@ Documentazione di avanzamento: contesto accademico, architettura, lavoro già sv
 | Ateneo            | Università degli Studi di Perugia              |
 | Corso di laurea   | Informatica (L-31)                             |
 | Scadenza indicativa | Entro primavera                              |
-| Paper di riferimento | `main.pdf` (nella root del repository)       |
 
 ---
 
@@ -168,7 +167,7 @@ stress-ng --cpu 0 --timeout 60s
 
 | Elemento              | Note |
 |-----------------------|------|
-| `main.pdf`            | Paper di riferimento correlato alla tesi |
+| `.pdf`            | Paper di riferimento correlato alla tesi |
 | `capture_rpi.sh`      | Avviatore bash del client di cattura (vedi §5.1) |
 | `capture_client.txt`  | Client Python di cattura foto + metadati (vedi §5.2) |
 | `pro-uZKfjCJP.jpeg`   | Immagine di esempio / prova |
@@ -248,7 +247,6 @@ systemd (o comando manuale)
 - [x] Collegamento Camera Module 3 via camera cable
 - [x] Verifica cattura con `rpicam-still` (JPG)
 - [x] Disponibilità `stress-ng` per test CPU/ventola
-- [x] Paper di riferimento presente in repo (`main.pdf`)
 
 ### Da fare
 
