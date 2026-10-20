@@ -1,0 +1,198 @@
+/**
+ * ESP32-CAM (AI-Thinker): rilevazione evento + wake Raspberry Pi 5.
+ *
+ * - WAKE  GPIO14 → optoaccoppiatore → pad J2 del Pi (impulso breve)
+ * - ALIVE GPIO13 ← GPIO17 del Pi (alto = Pi acceso)
+ *
+ * Nessun trasferimento HTTP di immagini verso il Pi: il Pi scatta da solo
+ * con Camera Module 3 dopo il boot. Vedi ../espconfig.md e ../piconfig.md.
+ */
+
+#include <Arduino.h>
+#include "esp_camera.h"
+
+// Pinout AI-Thinker ESP32-CAM (CameraWebServer)
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM        5
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
+
+constexpr int PIN_WAKE = 14;
+constexpr int PIN_ALIVE = 13;
+
+constexpr uint32_t WAKE_PULSE_MS = 200;
+constexpr uint32_t ALIVE_WAIT_MS = 15000;
+constexpr uint32_t EVENT_COOLDOWN_MS = 30000;
+
+static uint32_t lastEventMs = 0;
+
+bool piAlive() {
+  return digitalRead(PIN_ALIVE) == HIGH;
+}
+
+void pulseJ2() {
+  // Pressione breve: mai ~1 s (hard off sul Pi).
+  digitalWrite(PIN_WAKE, HIGH);
+  delay(WAKE_PULSE_MS);
+  digitalWrite(PIN_WAKE, LOW);
+}
+
+bool waitForAlive(uint32_t timeoutMs) {
+  const uint32_t t0 = millis();
+  while (millis() - t0 < timeoutMs) {
+    if (piAlive()) {
+      return true;
+    }
+    delay(250);
+  }
+  return false;
+}
+
+/**
+ * Impulso WAKE solo se il Pi risulta spento (ALIVE basso).
+ * Se ALIVE è già alto (acceso o in shutdown), non ritentare.
+ */
+bool ensurePiOn() {
+  if (piAlive()) {
+    Serial.println("ALIVE high: Pi already on (or shutting down) — skip WAKE");
+    return true;
+  }
+
+  Serial.println("ALIVE low: pulsing J2 WAKE");
+  pulseJ2();
+
+  if (!waitForAlive(ALIVE_WAIT_MS)) {
+    Serial.println("Timeout waiting for ALIVE after WAKE");
+    return false;
+  }
+
+  Serial.println("ALIVE high: Pi booting");
+  return true;
+}
+
+bool initCamera() {
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sscb_sda = SIOD_GPIO_NUM;
+  config.pin_sscb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_QVGA;
+  config.jpeg_quality = 12;
+  config.fb_count = 1;
+  config.grab_mode = CAMERA_GRAB_LATEST;
+
+  if (psramFound()) {
+    config.frame_size = FRAMESIZE_SVGA;
+    config.jpeg_quality = 10;
+    config.fb_count = 2;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+  } else {
+    config.fb_location = CAMERA_FB_IN_DRAM;
+  }
+
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Hook computer vision / soglia evento.
+ * Sostituire con il modello scelto per la tesi.
+ * Per ora: legge un frame (scarta) e restituisce false — nessun wake spurio.
+ */
+bool eventDetected() {
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("eventDetected: capture failed");
+    return false;
+  }
+
+  // TODO: inferenza / soglia su fb->buf (JPEG) o frame RGB convertito.
+  // Esempio placeholder: mai triggerare automaticamente.
+  const bool hit = false;
+
+  esp_camera_fb_return(fb);
+  return hit;
+}
+
+void onEvent() {
+  const uint32_t now = millis();
+  if (now - lastEventMs < EVENT_COOLDOWN_MS) {
+    Serial.println("Event ignored (cooldown)");
+    return;
+  }
+  lastEventMs = now;
+
+  Serial.println("Event: ensuring Pi is on");
+  if (!ensurePiOn()) {
+    Serial.println("Event: wake failed");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("ESP32-CAM wake node starting");
+
+  pinMode(PIN_WAKE, OUTPUT);
+  digitalWrite(PIN_WAKE, LOW);
+  pinMode(PIN_ALIVE, INPUT_PULLDOWN);
+
+  if (!initCamera()) {
+    Serial.println("Halting: camera required for event path");
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  Serial.printf("Pins: WAKE=%d ALIVE=%d | piAlive=%d\n", PIN_WAKE, PIN_ALIVE,
+                piAlive() ? 1 : 0);
+}
+
+void loop() {
+  if (eventDetected()) {
+    onEvent();
+  }
+
+  // Test manuale da seriale: digita 'w' + Enter per forzare un wake attempt.
+  if (Serial.available()) {
+    const char c = Serial.read();
+    if (c == 'w' || c == 'W') {
+      Serial.println("Manual wake request");
+      onEvent();
+    }
+  }
+
+  delay(200);
+}
