@@ -33,18 +33,16 @@ It is **not** a daemon and does **not** loop continuously.
 
 ---
 
-## The `////////////////////` alternative blocks
+## The `# ===` alternative blocks
 
-Each sensor has **one or more alternative implementations** wrapped between two lines of `////////////////////`. Example:
+Each sensor has **one or more alternative implementations** wrapped between `# ============================================================` comment lines. Example:
 
 ```python
-////////////////////
-
+# ============================================================
 # ALTERNATIVE BME280: raw SMBus read ...
 def read_bme280_smbus() -> dict:
     ...
-
-////////////////////
+# ============================================================
 ```
 
 **Why:** You do not yet know the exact sensor models or pinout. The script

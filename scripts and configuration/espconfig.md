@@ -31,9 +31,12 @@ Assunzione di lavoro: **ESP32-CAM AI-Thinker** senza SD in uso. Quasi tutti i pi
 
 ## 3. Alternative di collegamento ESP ↔ Pi
 
-La scelta definitiva è ancora aperta; sotto le tre strade. La **A** è quella dettagliata tecnicamente (da note su halt / J2 del Pi 5).
+> **SCELTA DEFINITIVA: Alternativa A** (J2 + optoaccoppiatore + ALIVE)
+> 
+> Questa è l'unica modalità affidabile per Pi 5 con `POWER_OFF_ON_HALT=1`.
+> Le alternative B e C sono documentate solo per riferimento storico.
 
-### Alternativa A — J2 + optoaccoppiatore + ALIVE (soluzione dettagliata)
+### Alternativa A — J2 + optoaccoppiatore + ALIVE ✅ **SCELTA**
 
 Due linee elettriche:
 
@@ -132,7 +135,7 @@ Board: `esp32cam` (AI-Thinker) in `platformio.ini`.
 
 ## 6. Checklist lato ESP
 
-1. [ ] Scegliere alternativa A / B / C e cablare
+1. [x] **Scegliere alternativa A / B / C e cablare** → **A scelta definitiva**
 2. [ ] Se A: PC817 + 330 Ω + pulldown 10 kΩ + GND comune
 3. [ ] Verificare con tester i pad J2 (massa vs segnale)
 4. [ ] Flash firmware `esp32/` e test impulso solo a ALIVE basso

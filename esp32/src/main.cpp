@@ -1,8 +1,35 @@
 /**
  * ESP32-CAM (AI-Thinker): rilevazione evento + wake Raspberry Pi 5.
  *
- * - WAKE  GPIO14 → optoaccoppiatore → pad J2 del Pi (impulso breve)
- * - ALIVE GPIO13 ← GPIO17 del Pi (alto = Pi acceso)
+ * SCELTA DEFINITIVA: J2 pads + optocoupler (PC817) + ALIVE line
+ * ============================================================
+ *
+ * CABLAGGIO WAKE (ESP → Pi):
+ *   ESP GPIO14 (PIN_WAKE) ──[330Ω]──►| PC817 LED anode
+ *                              PC817 LED cathode ──► GND (ESP)
+ *                              PC817 transistor: emitter → J2 pad GND, collector → J2 pad signal
+ *   Impulso: HIGH per 200ms → optocoupler chiude J2 → Pi si riavvia
+ *   MAI tenere HIGH >1s (hard off sul Pi)
+ *
+ * CABLAGGIO ALIVE (Pi → ESP):
+ *   Pi GPIO17 (config.txt: gpio=17=op,dh) ──► ESP GPIO13 (PIN_ALIVE)
+ *   Pulldown 10kΩ su GPIO13 verso GND (lato ESP)
+ *   GND COMUNE tra Pi ed ESP (necessario per ALIVE)
+ *   ALIVE HIGH = Pi acceso (rail 3.3V su)
+ *   ALIVE LOW  = Pi in halt (rail 3.3V spento con POWER_OFF_ON_HALT=1)
+ *
+ * ALIMENTAZIONE ESP:
+ *   Con POWER_OFF_ON_HALT=1, il rail 3.3V del Pi si spegne in halt.
+ *   Il pin 5V del Pi resta tipicamente alimentato.
+ *   Alimentare l'ESP dal 5V del Pi (pin 2/4) o da alimentatore condiviso a monte.
+ *
+ * LOGICA FIRMWARE:
+ *   1. Init camera AI-Thinker
+ *   2. PIN_WAKE output LOW a riposo; PIN_ALIVE input pulldown
+ *   3. Su evento (eventDetected()):
+ *      - Se ALIVE LOW → impulso WAKE → attendi ALIVE HIGH (timeout 15s)
+ *      - Se ALIVE HIGH → NON dare impulso (Pi già acceso o in shutdown)
+ *   4. Cooldown 30s tra eventi per evitare wake ripetuti
  *
  * Nessun trasferimento HTTP di immagini verso il Pi: il Pi scatta da solo
  * con Camera Module 3 dopo il boot. Vedi ../espconfig.md e ../piconfig.md.

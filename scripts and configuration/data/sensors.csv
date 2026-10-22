@@ -1,0 +1,2 @@
+timestamp_iso,bme280_temperature_c,bme280_humidity_pct,bme280_pressure_hpa,gps_latitude,gps_longitude,gps_altitude_m,gps_satellites,water_present_bool,soil_moisture_voltage,soil_moisture_percent,methane_voltage,methane_ppm_approx,sensors_ok,sensors_failed
+2026-10-22T07:35:24.747394+00:00,,,,,,,,,,,,,"bme280,gps,water,soil_moisture,methane",

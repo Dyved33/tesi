@@ -42,8 +42,34 @@ fi
 # Default capture interval for unattended mode; override in .env.systemd.
 CAPTURE_INTERVAL="${CAPTURE_INTERVAL:-30}"
 
+# Detect oneshot mode
+ONESHOT=false
+for arg in "$@"; do
+  if [[ "$arg" == "--oneshot" ]]; then
+    ONESHOT=true
+    break
+  fi
+done
+
 if [[ $# -gt 0 ]]; then
-  exec python -m backend.capture_client "$@"
+  # Run capture client with all args
+  python -m backend.capture_client "$@"
+  CAPTURE_EXIT=$?
+else
+  # Continuous mode
+  python -m backend.capture_client --interval "$CAPTURE_INTERVAL"
+  CAPTURE_EXIT=$?
 fi
 
-exec python -m backend.capture_client --interval "$CAPTURE_INTERVAL"
+# In oneshot mode (energy-aware cycle), also run sensors.py for CSV logging
+if [[ "$ONESHOT" == "true" ]]; then
+  echo "[capture_rpi] Running sensors.py for environmental CSV logging..."
+  python sensors.py
+  SENSORS_EXIT=$?
+  # Exit with error if either failed
+  if [[ $CAPTURE_EXIT -ne 0 || $SENSORS_EXIT -ne 0 ]]; then
+    exit 1
+  fi
+fi
+
+exit $CAPTURE_EXIT

@@ -129,11 +129,10 @@ def read_bme280() -> dict:
     }
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE BME280: raw SMBus read (no Adafruit library).
 # Use this if adafruit-circuitpython-bme280 cannot be installed.
-////////////////////
+# ============================================================
 
 def read_bme280_smbus() -> dict:
     import smbus2
@@ -152,11 +151,10 @@ def read_bme280_smbus() -> dict:
         return {"temperature": None, "humidity": None, "pressure": None}
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE BME280: dummy / disabled.
 # Returns None for all fields; useful for bench testing without hardware.
-////////////////////
+# ============================================================
 
 def read_bme280_dummy() -> dict:
     return {"temperature": None, "humidity": None, "pressure": None}
@@ -210,10 +208,9 @@ def parse_nmea_coord(value: str, direction: str):
         return None
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE GPS: dummy / no fix.
-////////////////////
+# ============================================================
 
 def read_gps_dummy() -> dict:
     return {"latitude": None, "longitude": None, "altitude": None, "satellites": None}
@@ -232,10 +229,9 @@ def read_water() -> dict:
     return {"present": wet}
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE water: RPi.GPIO raw.
-////////////////////
+# ============================================================
 
 def read_water_rpigpio() -> dict:
     import RPi.GPIO as GPIO
@@ -248,10 +244,9 @@ def read_water_rpigpio() -> dict:
     return {"present": wet}
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE water: dummy.
-////////////////////
+# ============================================================
 
 def read_water_dummy() -> dict:
     return {"present": None}
@@ -271,11 +266,10 @@ def read_adc(channel: int, chip: int = 0, vref: float = 3.3) -> float:
     return chan.voltage
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE ADC: raw spidev read from MCP3008.
 # No Adafruit library required; returns voltage on the selected channel.
-////////////////////
+# ============================================================
 
 def read_adc_spidev(channel: int, chip: int = 0, vref: float = 3.3) -> float:
     import spidev
@@ -293,10 +287,9 @@ def read_adc_spidev(channel: int, chip: int = 0, vref: float = 3.3) -> float:
     return round(voltage, 4)
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE ADC: dummy.
-////////////////////
+# ============================================================
 
 def read_adc_dummy(channel: int, **kwargs) -> float:
     return None
@@ -320,11 +313,10 @@ def read_soil_moisture() -> dict:
     return {"voltage": None, "percent": None}
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE soil moisture: digital threshold only (if sensor has DO pin),
 # using RPi.GPIO instead of gpiozero.
-////////////////////
+# ============================================================
 
 def read_soil_moisture_gpio() -> dict:
     import RPi.GPIO as GPIO
@@ -337,10 +329,9 @@ def read_soil_moisture_gpio() -> dict:
     return {"voltage": None, "percent": None, "wet_bool": wet}
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE soil moisture: dummy.
-////////////////////
+# ============================================================
 
 def read_soil_moisture_dummy() -> dict:
     return {"voltage": None, "percent": None}
@@ -362,10 +353,9 @@ def read_methane() -> dict:
     return {"voltage": None, "ppm": None}
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE methane: digital DO pin via RPi.GPIO.
-////////////////////
+# ============================================================
 
 def read_methane_gpio() -> dict:
     import RPi.GPIO as GPIO
@@ -378,10 +368,9 @@ def read_methane_gpio() -> dict:
     return {"voltage": None, "ppm": None, "alarm_bool": alarm}
 
 
-////////////////////
-
+# ============================================================
 # ALTERNATIVE methane: dummy.
-////////////////////
+# ============================================================
 
 def read_methane_dummy() -> dict:
     return {"voltage": None, "ppm": None}

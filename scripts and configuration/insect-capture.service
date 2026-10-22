@@ -1,0 +1,17 @@
+[Unit]
+Description=One-shot insect capture after wake, then halt
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rpi5-03
+WorkingDirectory=/home/rpi5-03/tesi
+Environment=PROJECT_DIR=/home/rpi5-03/tesi
+EnvironmentFile=-/home/rpi5-03/tesi/.env.systemd
+ExecStart=/home/rpi5-03/tesi/capture_rpi.sh --oneshot
+ExecStartPost=/bin/systemctl poweroff
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

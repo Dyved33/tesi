@@ -246,7 +246,9 @@ sudo systemctl poweroff
 
 Adatta i path (`WorkingDirectory`, path dello script) alla macchina `rpi5-03`.
 
-`/etc/systemd/system/insect-capture.service`:
+Il file servizio è nel repo: [`scripts and configuration/insect-capture.service`](insect-capture.service).
+
+Copia in `/etc/systemd/system/insect-capture.service` (adatta `User` e path se diversi):
 
 ```ini
 [Unit]
@@ -259,7 +261,7 @@ Type=oneshot
 User=rpi5-03
 WorkingDirectory=/home/rpi5-03/tesi
 Environment=PROJECT_DIR=/home/rpi5-03/tesi
-# Opzionale: EnvironmentFile=-/home/rpi5-03/tesi/.env.systemd
+EnvironmentFile=-/home/rpi5-03/tesi/.env.systemd
 ExecStart=/home/rpi5-03/tesi/capture_rpi.sh --oneshot
 ExecStartPost=/bin/systemctl poweroff
 RemainAfterExit=no
@@ -279,7 +281,7 @@ Note:
 
 - `ExecStartPost=... poweroff` spegne anche se vuoi distinguere fallimento cattura vs successo: in quel caso usa uno script wrapper che fa poweroff solo su exit 0, oppure un secondo oneshot `OnSuccess=`.
 - Per sessioni di test lunghe, **disabilita** temporaneamente il servizio o commenta il `poweroff`.
-- I moduli `backend.*` richiesti da `capture_client` devono essere presenti nel `WorkingDirectory` (oggi non sono ancora in questa repo — vedi README §5.2).
+- I moduli `backend.*` richiesti da `capture_client` sono ora nel repo in `scripts and configuration/backend/`.
 
 ### 9.4 `.env.systemd` (opzionale)
 

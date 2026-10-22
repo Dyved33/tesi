@@ -1,0 +1,1 @@
+"""Backend package for sensor reading and photo metadata handling."""
