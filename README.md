@@ -1,369 +1,281 @@
-# Sistema di monitoraggio gestito da Raspberry
+# Smart camera per il monitoraggio visivo in campo
 
-> Titolo provvisorio della tesi.
+Documentazione di avanzamento del progetto di tesi, allineata al piano operativo.
 
-Documentazione di avanzamento: contesto accademico, architettura, lavoro già svolto e attività ancora da completare.
+**Tesisti:** David Cardinali e Tommaso Garofani  
+**Relatore:** Francesco Betti Sorbelli  
+**Correlatori:** Lorenzo Palazzetti e Cristina M. Pinotti  
+**Documento di riferimento:** [`plan.pdf`](plan.pdf) (19 ottobre 2026)
 
 **Guide di configurazione:**
 
-- [Configurazione Raspberry Pi](piconfig.md) — EEPROM, halt, linea ALIVE, systemd, cattura
-- [Configurazione ESP32-CAM](espconfig.md) — pin, cablaggio (alternative), firmware PlatformIO
+- [Configurazione Raspberry Pi](scripts%20and%20configuration/piconfig.md) — spegnimento a basso consumo, linea ALIVE, sensori sul Pi, avvio automatico, cattura
+- [Configurazione ESP32](scripts%20and%20configuration/espconfig.md) — BME280, segnali di risveglio, previsione e decisione, PlatformIO
+- [Spiegazione script sensori](scripts%20and%20configuration/pyexplanation.md) — come funziona `sensors.py`
+
+---
+
+## Glossario rapido
+
+| Termine | Significato in questo progetto |
+|---------|--------------------------------|
+| **Halt** | Il Raspberry è spento a livello software ma resta alimentato; si può riaccendere dal pulsante o dai pad J2. Non è “staccato dalla presa”. |
+| **Wake** | Impulso con cui l’ESP32 riaccende il Pi (simula la pressione del pulsante). |
+| **ALIVE** | Segnale dal Pi all’ESP: alto = Pi acceso; basso = Pi in halt. Evita di “premere” il pulsante se il Pi è già acceso. |
+| **Forecaster** | Modulo sull’ESP che **prevede** temperatura e umidità (reti GRU quantizzate). |
+| **Decider** | Modulo sull’ESP che **decide** se svegliare il Pi (filtro biologico + classificatore di raffinamento). |
+| **App selettiva** | Il Pi resta in halt e si accende solo quando il decider autorizza uno scatto (studio dei consumi). |
+| **App continuativa** | Il Pi resta acceso in una fascia oraria e raccoglie immagini + misure per costruire un dataset. |
+| **TMC** | Manoscritto di riferimento sullo wake-up “biology-aware” (IEEE Transactions on Mobile Computing). |
+| **CV** | Computer vision: analisi delle immagini sul Raspberry (rilevamento, conteggio, area colonie, …). |
+| **BMSB** | Cimice asiatica (*Halyomorpha halys*), uno dei casi di studio. |
+| **EEPROM** | Memoria di configurazione del Raspberry Pi 5 che conserva le impostazioni anche a spento; qui si usa per impostare come si comporta il Pi in halt. |
+| **POWER_OFF_ON_HALT = 1** | Impostazione EEPROM che, quando il Pi entra in halt, spegne il rail a 3,3 V. Il consumo tipico scende a circa 0,01 W; il Pi resta collegato alla presa e riaccendibile da pulsante o pad J2. |
+| **WAKE_ON_GPIO = 0** | Sul Pi 5 disabilita il risvevio via GPIO (usato sul Pi 4). L'accensione avviene tramite pulsante fisico o pad J2. |
+| **Pad J2** | Punti di contatto sulla scheda del Raspberry Pi che simulano la pressione del pulsante di accensione. Chiudendo brevemente i due pad il Pi si avvia. |
+| **Optoaccoppiatore PC817** | Componente che lascia all'ESP32 di “premere” virtualmente il pulsante del Pi senza collegare elettricamente i due circuiti: isola le tensioni e protegge entrambe le schede. |
+| **I2C / UART / SPI** | Diversi standard di comunicazione tra schede e sensori: I2C per il BME280, UART per il GPS, SPI per letture analogiche tramite un convertitore ADC. |
+| **ADC / MCP3008** | Convertitore analogico-digitale: permette al Pi (che ha solo pin digitali) di leggere sensori che restituiscono una tensione, come umidità del suolo e metano. |
+| **NMEA / `$GPGGA`** | Standard e frase tipo usata dai ricevitori GPS per comunicare latitudine, longitudine e altre informazioni di posizione. |
+| **Gradi-giorno** | Indicatore usato in agricoltura e entomologia per stimare lo sviluppo di un insetto in base alle temperature accumulate nel tempo. |
+| **Indicatori fenologici** | Segnali dello stadio di sviluppo di una pianta o di un insetto (fioritura, schiusa, ecc.), usati per capire quando scattare foto o raccogliere dati. |
+| **GRU quantizzate** | Rete neurale ricorrente (tipo GRU) resa più leggera tramite quantizzazione, così da poter girare sull'ESP32 con risorse limitate. |
+| **HistGBT** | Classificatore di raffinamento citato nel manoscritto TMC: combina lo storico delle misure con una tecnica di machine learning (gradient boosting) per decidere se svegliare il Pi. |
+| **Back-powering** | Rischio per cui una scheda alimentata tiene accesa un'altra attraverso i segnali di dati. Si evita non pilotando TX verso il Pi quando ALIVE è basso. |
+| **Strapping pin** | Pin dell'ESP32 con funzioni speciali all'avvio (ad esempio GPIO12). Usarli come ingressi comuni può impedire il corretto boot della scheda. |
+| **systemd / oneshot / poweroff** | systemd è il gestore di servizi del Raspberry Pi. Un servizio `oneshot` esegue un compito una volta e poi termina; `poweroff` spegne il sistema in modo controllato. |
+| **rpicam-still / libcamera-still** | Comandi da terminale per scattare foto con la Camera Module 3 di Raspberry Pi. |
+| **Burst (CSV)** | Lettura rapida in sequenza di tutti i sensori abilitati, con una sola riga scritta nel file CSV per ogni ciclo di misura. |
 
 ---
 
 ## 1. Contesto accademico
 
-| Voce              | Dettaglio                                      |
-|-------------------|------------------------------------------------|
-| Titolo (provvisorio) | Sistema di monitoraggio gestito da Raspberry |
-| Relatore          | Francesco Betti Sorbelli                       |
-| Ateneo            | Università degli Studi di Perugia              |
-| Corso di laurea   | Informatica (L-31)                             |
-| Scadenza indicativa | Entro primavera                              |
+| Voce | Dettaglio |
+|------|-----------|
+| Titolo | Smart camera per il monitoraggio visivo in campo |
+| Tesisti | David Cardinali, Tommaso Garofani |
+| Relatore | Francesco Betti Sorbelli |
+| Correlatori | Lorenzo Palazzetti, Cristina M. Pinotti |
+| Ateneo | Università degli Studi di Perugia |
+| Obiettivo temporale | Raccolta in campo **primavera 2027**; laurea indicativamente **luglio 2027** |
 
 ---
 
 ## 2. Obiettivo del progetto
 
-Monitorare **cimici / insetti dannosi per il raccolto** con un nodo outdoor basato su **Raspberry Pi 5**, che **non resta sempre acceso**.
+Realizzare una **smart camera modulare** per il monitoraggio visivo in campo, alimentata all’inizio dalla rete elettrica. Componenti principali: **Raspberry Pi 5**, **ESP32**, sensori e **due fotocamere**.
 
-Il Pi viene **risvegliato da un ESP32-CAM** quando è rilevato (o è probabile) un insetto. Una volta attivo, il Raspberry:
+Casi di studio possibili: cimice asiatica (BMSB), formiche, bombi, api e altri insetti. Per l’**afide lanigero del melo** i singoli individui sono troppo piccoli: interessa misurare l’**area delle colonie lanose** e come cambia nel tempo.
 
-1. cattura **foto** dell’insetto (Camera Module 3);
-2. legge **dati ambientali** dai sensori collegati al Pi;
-3. salva i dati **in locale** (per ora; trasmissione esterna in seguito);
-4. torna in **halt** (spento ma alimentato, risvegliabile dal pulsante / pad J2).
+Il sistema ha **due modi di lavorare** (stesso hardware, software diverso):
 
-In trasmissione da storage locale verso un altro device andrà gestita anche la **corruzione / integrità dei dati** (checksum, retry, ripresa trasferimenti incompleti).
+| Applicazione | A cosa serve | Cosa fa il Raspberry |
+|--------------|--------------|----------------------|
+| **Acquisizione selettiva** (studio energetico, rif. TMC) | Accendere il Pi solo quando ha senso scattare, per risparmiare energia | Di solito in halt → l’ESP lo sveglia → foto e analisi → di nuovo halt |
+| **Monitoraggio continuativo** | Costruire un dataset di immagini e misure | Resta acceso nella fascia oraria impostata (es. mattina–sera) |
 
-### Domanda di ricerca / metriche
-
-Ancora da formalizzare. Focus attuale: **risparmio energetico** (il Pi resta in halt tranne quando serve).
-
-Scenario operativo: il Pi è **sempre in halt** tranne quando l’ESP rileva un evento e lo riaccende.
+In entrambe le applicazioni l’**analisi delle immagini avviene sul Raspberry** (rilevamento o segmentazione a seconda del bersaglio).
 
 ---
 
 ## 3. Architettura
 
 ```
-                         outdoor / campo
- ┌──────────────────────────────────────────────────────────┐
- │                                                          │
- │   ┌─────────────────┐         WAKE (J2 via opto / alt.)  │
- │   │   ESP32-CAM     │──────────────────────────────────► │
- │   │  camera propria │         ◄── ALIVE (GPIO17 → ESP)   │
- │   │  (trigger / CV) │                                    │
- │   └─────────────────┘                                    │
- │                                                          │
- │   ┌─────────────────┐     camera cable                   │
- │   │ Raspberry Pi 5  │◄──────────────── Camera Module 3   │
- │   │  rpi5-03        │     (foto HD, solo sul Pi)         │
- │   │  (HALT di norma)│◄── sensori ambientali (solo sul Pi)│
- │   └─────────────────┘                                    │
- │            │                                             │
- │            ▼                                             │
- │   storage locale (foto JPG + telemetria)                 │
- │   → trasmissione esterna (da definire)                   │
- │   → controllo integrità / anti-corruzione in trasferimento│
- └──────────────────────────────────────────────────────────┘
+                              campo (outdoor)
+ ┌─────────────────────────────────────────────────────────────────┐
+ │  Box principale                                                  │
+ │  ┌──────────────┐   WAKE (pad J2 via opto) ┌──────────────────┐ │
+ │  │    ESP32     │─────────────────────────►│ Raspberry Pi 5   │ │
+ │  │  previsione  │◄── ALIVE (GPIO17) ───────│ + 2 fotocamere   │ │
+ │  │  + decisione │   dati BME (a richiesta  │ Camera Module 3  │ │
+ │  │  (sempre on) │    o a cadenza)          │ + 2ª ottica      │ │
+ │  └──────┬───────┘                          └────────┬─────────┘ │
+ │         │ cavo I2C a tenuta                         │           │
+ │         ▼                                           ▼           │
+ │  ┌──────────────┐                      metano, suolo, acqua, GPS│
+ │  │   BME280     │                      (solo sul Pi; letti solo │
+ │  │  (custodia   │                       quando il Pi è acceso)  │
+ │  │   3D fuori)  │                                               │
+ │  └──────────────┘                                               │
+ │                                                                  │
+ │  salvataggio locale → database (misure, foto, GPS, log, CV)      │
+ │  → Wi‑Fi / modem 4G → accesso remoto, backup, scambio con drone │
+ └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Linee elettriche (scelta principale documentata):**
+### Dove sono collegati i sensori
+
+| Componente | Collegato a | Perché / note |
+|------------|-------------|----------------|
+| **BME280** (temperatura, umidità, pressione) | **Solo ESP32** | Custodia 3D **fuori** dal box; cavo a tenuta. Così si misura l’aria esterna, non il calore delle schede |
+| Metano, umidità del suolo, sensore acqua, GPS, altri moduli | **Solo Raspberry Pi** | Si leggono solo a Pi acceso |
+| Due fotocamere | Raspberry Pi | Supporti fissi; si orientano a mano in installazione |
+
+ESP32 e BME280 **restano alimentati** anche quando il Raspberry è in halt o spento.
+
+### Segnali di risveglio (solo applicazione selettiva)
 
 | Linea | Direzione | Funzione |
 |-------|-----------|----------|
-| WAKE  | ESP → pad J2 del Pi (tramite optoaccoppiatore) | Simula la pressione del pulsante di accensione |
-| ALIVE | GPIO17 del Pi → ESP | Indica all’ESP se il Pi è acceso |
+| WAKE | ESP → pad J2 del Pi (tramite optoaccoppiatore) | Simula una pressione breve del pulsante di accensione |
+| ALIVE | GPIO17 del Pi → ESP | Dice all’ESP se il Pi è acceso |
 
-Non c’è trasferimento immagini né handshake dati via HTTP tra ESP e Pi: l’ESP **sveglia** il Pi; il Pi **scatta da solo** con la Camera Module 3.
+### Consumo del Raspberry Pi 5
 
-**Alternative di collegamento** (GPIO diretto, USB) e dettaglio cablaggio: vedi [espconfig.md](espconfig.md).
+Il Pi 5 **non ha** lo spegnimento “leggero” in RAM (suspend-to-RAM). Stati usati nel progetto:
 
-### Policy power (decisa)
+- **acceso** — acquisizione e analisi in corso;
+- **halt** — spento ma ancora collegato all’alimentazione; riaccendibile da pulsante o pad J2.
 
-Il Raspberry Pi 5 **non supporta suspend-to-RAM** (deep sleep). Gli stati utili sono:
+Con l’impostazione EEPROM `POWER_OFF_ON_HALT=1`, in halt si spegne anche la linea a 3,3 V e il consumo tipico scende a circa **0,01 W**. Dettagli passo-passo: [piconfig.md](scripts%20and%20configuration/piconfig.md).
 
-- **acceso** — acquisizione in corso;
-- **halt** — spento ma alimentato, risvegliabile dal pulsante di accensione o dai pad J2.
+### Ruoli dei componenti
 
-Se l’alimentazione viene tagliata del tutto, nessun segnale dall’ESP può riaccendere il Pi (servirebbe un relè/MOSFET sull’alimentatore). La strada adottata è l’**halt** con `POWER_OFF_ON_HALT=1` (dettaglio in [piconfig.md](piconfig.md)).
-
-### Ruoli
-
-| Componente           | Ruolo                                                                 | Stato            |
-|----------------------|-----------------------------------------------------------------------|------------------|
-| Raspberry Pi 5       | Acquisizione foto HD, lettura sensori, storage locale, poi halt       | OS + SSH OK      |
-| Camera Module 3      | Foto insetto (JPG) — **solo sul Pi**                                  | Funzionante      |
-| ESP32-CAM            | Rilevazione preliminare (camera propria + CV da configurare) + wake   | Firmware in repo |
-| Sensori ambientali   | Umidità suolo, acqua, pressione/temperatura, metano, geolocalizzazione| Da collegare     |
-
-> **Nota:** i sensori sono previsti **solo sul Pi**. Il trigger di wake è sull’ESP32-CAM (camera integrata / evento configurabile). Se in futuro servisse logging ambientale a Pi in halt, andrà rivalutata la collocazione di alcuni sensori sull’ESP32.
+| Componente | Cosa fa |
+|------------|---------|
+| Raspberry Pi 5 | Foto, analisi immagini, sensori propri, salvataggio/database; halt oppure fascia oraria continua |
+| Camera Module 3 | Prima fotocamera (connettore CSI) |
+| Seconda fotocamera | Ottica con abbastanza pixel sul soggetto (candidata: High Quality Camera + obiettivo intercambiabile; ancora da scegliere) |
+| ESP32 | Legge il BME280; in app selettiva esegue previsione e decisione; manda le misure al Pi; controlla il risveglio |
+| BME280 | Ambiente esterno, solo tramite ESP |
 
 ---
 
-## 4. Hardware
+## 4. Hardware (sintesi)
 
 ### 4.1 Raspberry Pi 5 (`rpi5-03`)
 
-| Voce            | Valore                                              |
-|-----------------|-----------------------------------------------------|
-| Modello         | Raspberry Pi 5                                      |
-| OS              | Raspberry Pi OS **64-bit** (Bookworm; immagine principale dalla pagina download ufficiale) |
-| Storage         | microSD **32 GB**                                   |
-| Alimentazione   | Alimentatore ufficiale dello **starter kit** Raspberry |
-| Rete            | **Wi‑Fi e Ethernet** (IP via DHCP se non assegnato altrimenti) |
-| Accesso remoto  | **SSH** abilitato; previsto anche **Raspberry Pi Connect** |
-| Hostname        | `rpi5-03`                                           |
-| Utente          | `rpi5-03`                                           |
-| Credenziali     | Configurate sul dispositivo — **non documentate in chiaro in questo file** |
-| Power policy    | **Halt** (`POWER_OFF_ON_HALT=1`); wake da J2 / pulsante |
-| Ambiente        | **Outdoor**                                         |
-| Energia sistema | **Batteria** oppure **rete elettrica** (entrambi da supportare) |
-| Alimentazione con ESP32 | **Condivisa** con l’ESP32-CAM                 |
-| Avvio automatico job | **systemd** al boot → cattura oneshot → `poweroff` |
+| Voce | Valore |
+|------|--------|
+| Sistema operativo | Raspberry Pi OS 64-bit (Bookworm) |
+| Memoria di massa | microSD 32 GB |
+| Alimentazione iniziale | Rete elettrica (la batteria andrà supportata in seguito) |
+| Rete | Wi‑Fi (laboratorio/casa, poi modem 4G esterno); anche Ethernet |
+| Accesso remoto | SSH; previsto anche Raspberry Pi Connect / accesso autenticato |
+| Nome host / utente | `rpi5-03` |
+| Energia (app selettiva) | Halt + risveglio da J2; servizio systemd: una cattura al boot, poi spegnimento |
 
-```bash
-ssh rpi5-03@<ip-assegnato-da-dhcp>
-# oppure accesso tramite Raspberry Pi Connect
-```
+### 4.2 Fotocamere
 
-Configurazione EEPROM, `config.txt`, systemd: [piconfig.md](piconfig.md).
+| Fotocamera | Stato | Note |
+|------------|-------|------|
+| Camera Module 3 (sensore IMX708) | In uso / verificata | Comando `rpicam-still`, JPG, circa 4608×2592 |
+| Seconda (es. HQ + obiettivo) | Da scegliere e acquistare | Zoom ottico o lunga focale; pixel sufficienti sul bersaglio; in frutteto distanze fino a circa 4 m |
 
-### 4.2 Fotocamera (Raspberry Pi)
+La scelta dell’ottica **va fatta prima** del progetto definitivo del box (ingombro obiettivo, finestra trasparente, fissaggi).
 
-| Voce        | Valore |
-|-------------|--------|
-| Modello     | **Camera Module 3** (Sony IMX708) |
-| Collegamento| Camera cable (CSI) |
-| Sensore     | ~11.9 MP — risoluzione nativa **4608 × 2592** |
-| Formato     | **JPG** |
-| Uso         | Solo **foto** (non video/streaming al momento) |
-| Tool        | **`rpicam-still`** (stack libcamera) |
-| Storage     | **Locale** per ora; poi trasferimento verso altro device |
-| Integrità   | In trasferimento: gestire **corruzione dati** (vedi §7.1) |
-| Metadati    | Timestamp (e simili) ricavati **a parte**, non necessariamente via EXIF camera |
+### 4.3 ESP32 e BME280
 
-Esempio di cattura:
+L’ESP32 sta nel box principale; il BME280 sta fuori, nella sua custodia. Tra ESP e Pi: segnali WAKE/ALIVE e trasferimento delle misure (protocollo ancora da fissare: seriale, USB, ecc.).
 
-```bash
-rpicam-still -o insect_$(date +%Y%m%d_%H%M%S).jpg
-```
+Il firmware in [`esp32/`](esp32/) oggi è una **bozza** di risveglio su scheda **ESP32-CAM**. Obiettivo di piano: ESP32 che legge il BME280 e applica previsione + decisione — vedi [espconfig.md](scripts%20and%20configuration/espconfig.md).
 
-### 4.3 ESP32-CAM
+### 4.4 Altri sensori (sul Pi)
 
-| Voce              | Valore |
-|-------------------|--------|
-| Scheda            | **ESP32-CAM** (AI-Thinker) |
-| Camera            | Camera **integrata** sulla scheda (non è la Camera Module 3) |
-| Ruolo             | Rilevazione / probabilità presenza insetto → **wake Pi** |
-| Collegamento al Pi| **Principale:** WAKE su J2 via optoaccoppiatore + ALIVE su GPIO; alternative GPIO / USB in valutazione (vedi [espconfig.md](espconfig.md)) |
-| Trigger           | Input **configurabile** (computer vision sulla camera ESP — da implementare) |
-| Comunicazione     | Solo wake + senso stato (ALIVE); **nessun** trasferimento foto ESP→Pi |
-| Ambiente firmware | **PlatformIO** — cartella [`esp32/`](esp32/) |
-| Deep sleep ESP    | Opzionale in futuro (es. wake da PIR) per ridurre consumo |
+| Sensore | Cosa misura | Stato |
+|---------|-------------|-------|
+| Umidità suolo | Umidità nel terreno | Modello e interfaccia da identificare |
+| Monitoraggio acqua | Funzione da precisare nel gruppo | Da collegare |
+| Metano | Gas / CH₄ | Da collegare |
+| GPS | Posizione | Da collegare |
 
-### 4.4 Sensori (collegati al Raspberry Pi)
-
-| Sensore / funzione     | Grandezza                        | Host | Stato        |
-|------------------------|----------------------------------|------|--------------|
-| Soil moisture          | Umidità del suolo                | Pi   | Da collegare |
-| Acqua                  | Presenza / livello acqua         | Pi   | Da collegare |
-| Pressione / temperatura| Pressione atmosferica, temperatura | Pi | Da collegare |
-| Metano                 | Concentrazione CH₄ / gas         | Pi   | Da collegare |
-| Geolocalizzazione      | Posizione (GPS o equivalente)    | Pi   | Da collegare |
-
-**Soglie di trigger / allarme:** da regolare in base a **dati storici** e a **computer vision** (non ancora fissate).
-
-### 4.5 Tool di test hardware sul Pi
-
-| Tool        | Scopo |
-|-------------|--------|
-| `stress-ng` | Stressare CPU (e non solo) per osservare comportamento HW, **CPU e ventola** |
-
-```bash
-stress-ng --cpu 0 --timeout 60s
-```
+È prevista una **morsettiera modulare**: si possono aggiungere o sostituire i moduli supportati senza rifare tutto il cablaggio, con connettori a tenuta e polarizzati.
 
 ---
 
-## 5. Software e file già in repository
+## 5. Software
 
-| Elemento              | Note |
-|-----------------------|------|
-| `main.pdf`            | Paper di riferimento correlato alla tesi |
-| `piconfig.md`         | Guida configurazione Raspberry Pi (halt, ALIVE, systemd) |
-| `espconfig.md`        | Guida ESP32-CAM (cablaggio, pin, firmware) |
-| `esp32/`              | Progetto PlatformIO: wake Pi + stub evento/CV |
-| `capture_rpi.sh`      | Avviatore bash del client di cattura (vedi §5.1) |
-| `capture_client.txt`  | Client Python di cattura foto + metadati (vedi §5.2) |
-| `pro-uZKfjCJP.jpeg`   | Immagine di esempio / prova |
-| `schemi elettrici/`   | KiCad / schemi (es. BME280) |
+### 5.1 Acquisizione selettiva (studio energetico)
 
-### 5.1 `capture_rpi.sh` — cosa fa
+Riferimento: manoscritto *A Two-Tier Biology-Aware Wake-Up Control for Energy-Measured IoT Insect Monitoring* (IEEE TMC).
 
-È lo **script di avvio** (bash). Non scatta le foto da solo: prepara l’ambiente e lancia il client Python.
+In sintesi:
 
-In pratica, in ordine:
+1. L’ESP legge il BME280 e mantiene lo storico necessario.
+2. Il **forecaster** prevede temperatura e umidità.
+3. Il **decider** combina regole biologiche e un classificatore di raffinamento (nel paper: HistGBT) e decide se svegliare il Pi.
+4. La pressione si **registra** ma, nel lavoro TMC, **non entra** nelle variabili del decider.
+5. Le regole biologiche riguardano la BMSB; per altri insetti vanno validate a parte.
+6. A Pi in halt i sensori sul Pi **non** vengono letti; solo l’ESP continua a usare il BME secondo la politica.
+7. Se autorizzato: il Pi si accende → fotografa → analizza → salva → spegnimento controllato (non si taglia l’alimentazione prima che l’halt sia completo).
+8. Si misurano i consumi reali di entrambe le schede e delle operazioni (avvio, caricamento modello, inferenza, spegnimento).
 
-1. Si posiziona nella cartella del progetto (derivata dalla posizione dello script, oppure da `PROJECT_DIR`).
-2. Se esiste un file `.env.systemd`, carica da lì eventuali impostazioni (es. `CAPTURE_INTERVAL`, `PYENV_VERSION`).
-3. Cerca e attiva un ambiente Python (`pyenv` oppure un virtualenv in `$PYENV_ROOT`).
-4. Avvia il programma di cattura come modulo Python:
-   - **senza argomenti** → modalità continua, una foto ogni N secondi (default **30**, override con `CAPTURE_INTERVAL`);
-   - **con argomenti** → li passa così come sono al client (es. `--oneshot`).
+### 5.2 Monitoraggio continuativo (dataset)
 
-È pensato per essere chiamato da **systemd** al boot del Pi: dopo il wake, la cattura parte senza login SSH.
+- Il Pi resta acceso nella fascia oraria configurata (esempio: mattina–sera).
+- Legge il BME tramite l’ESP e direttamente gli altri sensori; le **cadenze** di misure e foto sono **indipendenti** e configurabili (esempio di piano: misure ogni minuto, foto ogni cinque minuti).
+- Serve un **database** che colleghi misure, immagini, GPS, log e risultati dell’analisi con identificativi e orari coerenti.
+- Gli orologi di ESP e Pi vanno sincronizzati; l’orario della **misura** va tenuto distinto da quello della **ricezione** sul Pi.
+- Sul Pi girano i modelli di visione: presenza, posizione e conteggio insetti, oppure area delle colonie lanose; nel database si conservano anche versione del modello e risultati.
 
-> Se non trova un ambiente Python valido, termina con errore e non cattura nulla.
+### 5.3 Connettività e scambio dati
 
-**Uso energy-aware (consigliato):** al boot lanciare con `--oneshot`, poi `systemctl poweroff` per tornare in halt. Dettaglio unità systemd in [piconfig.md](piconfig.md).
+- Connessione: prima Wi‑Fi di laboratorio/casa, poi modem 4G esterno. Acquisizione e salvataggio locale devono funzionare anche **senza rete**; alla riconnessione si riprendono i trasferimenti senza duplicare o cancellare troppo presto gli originali.
+- Accesso remoto autenticato: stato del sistema, ultime acquisizioni, spazio disco, temperature, errori; comandi essenziali (avvio/arresto raccolta, cambio cadenze). Nell’app selettiva l’accesso al Pi c’è solo quando è acceso e in rete.
+- Previsto uno scambio wireless con un **secondo Raspberry Pi 5 sul drone** (file, sincronizzazione, comandi), da provare prima al banco e poi a distanze crescenti.
 
-```bash
-# Esempio manuale (dopo aver configurato pyenv/venv)
-./capture_rpi.sh --oneshot
-./capture_rpi.sh --oneshot --profile macro --zoom 2.0
-./capture_rpi.sh                  # continuo, intervallo da CAPTURE_INTERVAL o 30s
-```
+### 5.4 File nel repository
 
-### 5.2 `capture_client.txt` — cosa fa
+| Elemento | Contenuto |
+|----------|-----------|
+| `plan.pdf` | Piano operativo (fonte di questa documentazione) |
+| `main.pdf` | Materiale / paper di riferimento |
+| `scripts and configuration/piconfig.md` | Guida configurazione del Pi |
+| `scripts and configuration/espconfig.md` | Guida configurazione dell’ESP |
+| `scripts and configuration/pyexplanation.md` | Spiegazione di `sensors.py` |
+| `scripts and configuration/capture_rpi.sh` | Script che avvia la cattura |
+| `scripts and configuration/sensors.py` | Lettura una tantum dei sensori **sul Pi** |
+| `scripts and configuration/insect-capture.service` | Servizio systemd per l’app selettiva |
+| `backend/` | Client di cattura, metadati, lettori GPS/BME (BME di campo: via ESP) |
+| `esp32/` | Firmware PlatformIO (oggi: risveglio; poi BME + politica) |
+| `schemi elettrici/` | Schemi KiCad, tra cui BME280 |
 
-È il **programma che scatta le foto** (codice Python; l’estensione è `.txt` ma il contenuto è uno script Python destinato a essere eseguito come `python -m backend.capture_client`).
-
-In sintesi: chiama `rpicam-still` (o `libcamera-still`), salva un JPG e, se disponibili, aggiunge GPS e dati BME280 ai metadati dell’immagine.
-
-Dettaglio del flusso a ogni scatto:
-
-1. Crea (se manca) la cartella `static/uploads/images/`.
-2. Genera un nome file con data/ora, es. `rpi_20261019-124900.jpg`.
-3. Lancia la fotocamera con risoluzione di default **4608×2592** (Camera Module 3) e qualità JPEG alta.
-4. Opzioni utili da linea di comando:
-   - una sola foto (`--oneshot`) oppure ciclo continuo (`--interval`);
-   - zoom digitale (`--zoom`), profilo `standard` / `macro`;
-   - autofocus (`--af-mode`, `--af-range`, `--af-speed`, `--af-window`, `--af-on-capture`);
-   - shutter, denoise, sharpness, contrast.
-5. Dopo lo scatto prova a leggere:
-   - **GPS** → latitudine / longitudine;
-   - **BME280** → temperatura, umidità, pressione.
-6. Se trova qualcosa, salva questi valori nei **metadati** collegati alla foto (via moduli `backend.photo_metadata`).
-
-Modalità di esecuzione:
-
-| Modo | Comportamento |
-|------|----------------|
-| Continuo (default) | Scatta, aspetta l’intervallo, ripete all’infinito |
-| `--oneshot` | Scatta una foto e termina (adatto al ciclo wake → captura → halt) |
-
-> **Limite attuale:** lo script importa moduli `backend.*` (`bme_reader`, `gps_reader`, `photo_metadata`) che **non sono presenti in questa repo**. Quindi, così com’è, non è eseguibile standalone: va completato o adattato al progetto di tesi (stub dei reader, oppure packaging come pacchetto `backend`).
-
-### 5.3 Come lavorano insieme (ciclo energy-aware)
+**Ciclo tipico dell’app selettiva:**
 
 ```
-ESP rileva evento → impulso WAKE (J2)
-        │
-        ▼
- Pi esce da halt / boot
-        │
-        ▼
- systemd (After=… )  →  capture_rpi.sh --oneshot
-        │
-        ▼
- capture_client      →  JPG in static/uploads/images/
-        │
-        ▼
- systemctl poweroff  →  halt (rail 3V3 off se EEPROM configurata)
+ESP (previsione + decisione) autorizza
+        → impulso WAKE sui pad J2
+        → il Pi si avvia
+        → systemd lancia capture_rpi.sh --oneshot
+        → foto JPG (+ misure disponibili)
+        → systemctl poweroff → di nuovo in halt
 ```
 
-In modalità di sviluppo/test sul Pi già acceso si può usare il ciclo continuo senza poweroff.
+(`--oneshot` = una sola cattura e poi il programma termina.)
 
 ---
 
-## 6. Stato avanzamento
+## 6. Stato di avanzamento
 
-### Completato
+### Completato / in corso
 
-- [x] Definizione obiettivo applicativo (monitoraggio insetti / raccolto, energy-aware)
-- [x] Installazione OS Raspberry Pi 5 (64-bit Bookworm)
-- [x] Configurazione hostname/utente `rpi5-03`, SSH abilitato
-- [x] Rete Wi‑Fi + Ethernet
-- [x] Collegamento Camera Module 3 via camera cable
-- [x] Verifica cattura con `rpicam-still` (JPG)
-- [x] Disponibilità `stress-ng` per test CPU/ventola
-- [x] Policy power: **halt** (no deep sleep sul Pi 5); schema wake J2 + ALIVE documentato
-- [x] Guide `piconfig.md` / `espconfig.md` e bozza firmware PlatformIO in `esp32/`
+- [x] Piano operativo condiviso (`plan.pdf`)
+- [x] Sistema operativo sul Pi 5, hostname `rpi5-03`, SSH, rete
+- [x] Camera Module 3 verificata (`rpicam-still`)
+- [x] Strategia halt + schema WAKE/ALIVE documentato
+- [x] Guide di configurazione e bozza firmware di risveglio in `esp32/`
+- [x] Bozza pipeline di cattura e sensori nel repository
 
-### Da fare
+### Da fare (come da piano)
 
-- [ ] Scegliere e cablare in modo definitivo l’alternativa di collegamento (J2+opto vs GPIO vs USB) — vedi [espconfig.md](espconfig.md)
-- [ ] Applicare sul Pi le impostazioni EEPROM / `config.txt` / unità systemd di [piconfig.md](piconfig.md)
-- [ ] Completare firmware ESP32-CAM: **computer vision** / criterio di evento sulla camera ESP
-- [ ] Collegare e pilotare i sensori sul Pi (soil moisture, acqua, P/T, metano, geo)
-- [ ] Rendere eseguibile la pipeline di cattura (moduli `backend.*` mancanti)
-- [ ] Criteri di “insetto rilevato / probabile” (soglie + CV)
-- [ ] Trasmissione locale → altro device con **gestione corruzione / integrità** (checksum, retry, resume)
-- [ ] Accesso remoto con **Raspberry Pi Connect**
-- [ ] Misure energetiche (batteria vs rete) e test con `stress-ng`
-- [ ] Schemi KiCad / BOM / foto cablaggio wake in repo
-- [ ] Formalizzare ipotesi/metriche di tesi e scrittura entro primavera
+- [ ] Scegliere la seconda fotocamera/ottica e fare prove al banco (pixel sul bersaglio)
+- [ ] Confermare la scheda ESP definitiva; cablare il BME280 **solo** sull’ESP; custodia 3D esterna
+- [ ] Schema elettrico completo; verificare che ESP e BME restino alimentati a Pi in halt
+- [ ] Firmware: lettura BME + previsione/decisione; protocollo di invio dati al Pi
+- [ ] Collegare i sensori sul Pi (modelli, convertitori ADC, connettori a tenuta)
+- [ ] Progetto CAD del box e delle custodie sensori; stampa 3D; tenuta all’acqua
+- [ ] Software app selettiva e app continuativa (database, cadenze)
+- [ ] Modelli di visione sul Pi; valutazione su dati separati da quelli di sviluppo
+- [ ] Wi‑Fi / 4G, accesso remoto, sincronizzazione, collegamento al Pi sul drone
+- [ ] Campagna di raccolta in campo, primavera 2027
 
 ---
 
-## 7. Flusso operativo previsto
+## 7. Cronologia della documentazione
 
-1. ESP32-CAM resta alimentato e monitora (camera integrata / logica di probabilità insetto — CV da configurare).
-2. Al trigger, se la linea ALIVE è bassa (Pi in halt), invia impulso **WAKE** sui pad J2 (via optoaccoppiatore nella soluzione principale).
-3. Il Pi esce da halt, avvia rete, camera e servizio di acquisizione.
-4. Cattura JPG insetto (Camera Module 3) + lettura sensori ambientali + geolocalizzazione (quando disponibili).
-5. Salva tutto in **locale** (fase attuale).
-6. In un secondo momento, trasferisce i dati verso un altro device con controlli di integrità (§7.1).
-7. Il Pi esegue `poweroff` e torna in **halt**.
-8. L’ESP32 torna in monitoraggio; non deve ritentare il wake finché ALIVE è alto (incluso durante lo shutdown).
-
-Timeout e fail-safe (wake fallito, Pi bloccato acceso) **da affinarsi** in test sul campo.
-
-### 7.1 Integrità in trasmissione (locale → altro device)
-
-Obbligo di progetto: durante il trasferimento dei dati (foto JPG + telemetria) dallo storage locale verso un altro device bisogna **gestire la corruzione e le interruzioni**.
-
-Aspetti da coprire (da implementare):
-
-| Meccanismo              | Perché |
-|-------------------------|--------|
-| Checksum / hash (es. SHA-256) | Verificare che il file ricevuto sia identico all’originale |
-| Ack + retry             | Ritrasmettere se hash non coincide o trasferimento interrotto |
-| Resume / chunk          | Riprendere file grandi senza ripartire da zero (utile outdoor / rete instabile) |
-| Stato “pending / sent / verified” | Evitare di cancellare in locale dati non ancora verificati lato destinazione |
-| Log errori              | Diagnosticare corruzioni ricorrenti (SD, cavo, Wi‑Fi) |
-
-Fino a quando la trasmissione non è pronta, i dati restano **solo in locale**.
-
----
-
-## 8. Specifiche
-
-### Framework per programmare l’ESP32 — scelta
-
-| Opzione        | In sintesi |
-|----------------|------------|
-| **Arduino IDE**| Più semplice per iniziare; tante librerie ESP32-CAM |
-| **PlatformIO** | Come Arduino ma più ordinato (progetti, `platformio.ini`, dipendenze versionate) |
-| **ESP-IDF**    | Ufficiale Espressif; più potente, curva più ripida |
-| **MicroPython**| Python sulla scheda; rapido da prototipare, meno tipico per produzione |
-
-**Scelta: PlatformIO.**
-
-Motivi: riusa l’ecosistema librerie Arduino (utile per ESP32-CAM), tiene il progetto in cartelle versionabili nel repo Git, fissa le versioni di framework/librerie (riproducibilità), si integra bene con VS Code / Cursor. Arduino IDE va bene per prove lampo; ESP-IDF solo se servono API low-level avanzate.
-
-Build e flash: vedi [espconfig.md](espconfig.md) e cartella [`esp32/`](esp32/).
-
----
-
-## 9. Changelog documentazione
-
-| Data       | Modifica |
-|------------|----------|
-| 2026-10-19 | Prima bozza README |
-| 2026-10-19 | Aggiornamento completo da risposte (obiettivo insetti, HW, sensori sul Pi, ESP32-CAM, rete, roadmap) |
-| 2026-10-19 | PlatformIO; timer HW; systemd sì; storage locale; integrità trasmissione; deep sleep TBD |
-| 2026-10-19 | Spiegazione dettagliata di `capture_rpi.sh` e `capture_client.txt` (§5.1–5.3) |
-| 2026-10-20 | Architettura halt + WAKE/ALIVE; guide `piconfig.md` / `espconfig.md`; firmware `esp32/`; niente HTTP ESP↔Pi; capture spiegati per ciclo oneshot→poweroff |
+| Data | Modifica |
+|------|----------|
+| 2026-10-19 | Prime bozze README e guide (halt, ESP32-CAM) |
+| 2026-10-20 | Architettura WAKE/ALIVE; PlatformIO |
+| 2026-10-23 | Allineamento a `plan.pdf`; testo in italiano più chiaro; glossario |

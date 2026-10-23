@@ -2,12 +2,14 @@
 """
 sensors.py — One-shot environmental sensor reader for Raspberry Pi 5 thesis.
 
-Reads all available sensors in a single burst (meant to run while the Pi is
-awoken by the ESP32-CAM), then appends one row to data/sensors.csv and exits.
+Reads sensors hosted on the Pi (GPS, water, soil moisture, methane) in a single
+burst, appends one row to data/sensors.csv, and exits. Intended for the selective
+app while the Pi is awake after ESP wake, or on a timer in continuous mode.
 
-Each sensor has a PRIMARY implementation and one or more ALTERNATIVE
-implementations delimited by ///// blocks. Edit the SENSORS dict at the top to
-select which interface/pin/model matches your actual wiring.
+Per plan.pdf the BME280 is wired ONLY to the ESP32 (external 3D case). CSV columns
+for BME exist for data forwarded from the ESP; local I2C BME is bench-only.
+
+Edit the SENSORS dict to match actual wiring. See pyexplanation.md.
 """
 
 import csv
@@ -20,12 +22,14 @@ from datetime import datetime, timezone
 # CONFIGURATION — edit these to match your actual wiring / sensor models
 # ---------------------------------------------------------------------------
 SENSORS = {
-    # BME280: pressure / temperature / humidity (I2C)
+    # BME280: in the field this sensor lives on the ESP only (plan.pdf).
+    # Keep enabled+I2C only for bench tests with a temporary BME on the Pi.
+    # Production: set enabled False (or library dummy) and fill CSV from ESP feed.
     "bme280": {
-        "enabled": True,
+        "enabled": False,
         "bus": 1,
         "address": 0x77,          # try 0x76 if 0x77 is not detected
-        "library": "adafruit",    # adafruit | smbus | dummy
+        "library": "dummy",       # adafruit | smbus | dummy | (future: esp)
     },
     # GPS: NMEA over serial UART
     "gps": {

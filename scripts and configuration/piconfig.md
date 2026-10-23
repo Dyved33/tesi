@@ -1,7 +1,9 @@
 # Configurazione Raspberry Pi 5
 
-Guida operativa per halt a basso consumo, linea ALIVE, interfacce sensori, cattura automatica al boot e ritorno in halt.  
-Contesto generale: [README.md](README.md). Lato ESP: [espconfig.md](espconfig.md).
+Guida operativa per halt, linea ALIVE, sensori **collegati al Pi**, cattura al boot (app selettiva) e modalità continuativa.  
+Contesto: [README.md](../README.md) · Piano: [`plan.pdf`](../plan.pdf) · ESP: [espconfig.md](espconfig.md).
+
+> **In breve:** questa guida serve a configurare il Raspberry Pi 5 per due usi: (1) **app selettiva** — il Pi sta in halt e si accende solo quando l'ESP32 lo sveglia, scatta una foto e torna in halt; (2) **app continuativa** — il Pi resta acceso in una fascia oraria e raccoglie foto e misure a cadenze regolari.
 
 ---
 
@@ -16,14 +18,18 @@ sudo reboot
 
 ## 1. Halt (non deep sleep)
 
-Il Raspberry Pi 5 **non supporta suspend-to-RAM**. Gli stati utili sono:
+Il Raspberry Pi 5 **non supporta suspend-to-RAM**. Stati utili:
 
 | Stato | Significato |
 |-------|-------------|
 | Acceso | Kernel e servizi attivi |
-| Halt | Spento ma alimentato; riaccendibile dal pulsante o dai pad J2 |
+| Halt | Spento ma alimentato; riaccendibile da pulsante o pad J2 |
 
-Se togli l’alimentazione, nessun GPIO/segnale dall’ESP può riaccendere il Pi (servirebbe un relè o MOSFET sull’alimentatore).
+Se togli l'alimentazione, nessun segnale dall'ESP può riaccendere il Pi (servirebbe relè/MOSFET sull'alimentatore).
+
+> **Perché l'halt:** il Raspberry Pi 5 non ha lo spegnimento “leggero” in RAM (suspend-to-RAM). L'halt è lo stato più vicino allo spento che il Pi 5 supporta: il sistema è fermo ma la scheda resta collegata alla corrente, così l'ESP32 può ancora riaccenderla premendo virtualmente il pulsante (pad J2).
+
+**Vincolo di piano:** ESP32 e BME280 devono **restare alimentati** quando il Pi è in halt o disalimentato.
 
 ---
 
@@ -33,8 +39,6 @@ Se togli l’alimentazione, nessun GPIO/segnale dall’ESP può riaccendere il P
 sudo rpi-eeprom-config --edit
 ```
 
-Imposta:
-
 ```
 POWER_OFF_ON_HALT=1
 WAKE_ON_GPIO=0
@@ -42,10 +46,12 @@ WAKE_ON_GPIO=0
 
 | Impostazione | Effetto |
 |--------------|---------|
-| `POWER_OFF_ON_HALT=1` | Allo shutdown viene tolto il rail **3,3 V**. Il consumo tipico in halt scende da circa 1,2–1,6 W a circa **0,01 W**. Il pulsante di accensione / J2 resta utilizzabile. |
-| `WAKE_ON_GPIO=0` | Sul Pi 5 l’accensione passa dal **pulsante e dai pad**, non dai GPIO come sul Pi 4. Non esiste il trucco “GPIO3 wake” della generazione precedente. |
+| `POWER_OFF_ON_HALT=1` | Allo shutdown viene tolto il rail **3,3 V**. Consumo tipico in halt ~**0,01 W**. Pulsante / J2 restano utilizzabili. |
+| `WAKE_ON_GPIO=0` | Sul Pi 5 l'accensione passa da pulsante e pad, non da GPIO come sul Pi 4. |
 
-Dopo la modifica, riavvia e verifica con:
+> **Perché POWER_OFF_ON_HALT = 1:** con questa impostazione, quando il Pi entra in halt viene tolta l'alimentazione al rail a 3,3 V. Il consumo scende a circa 0,01 W, ma il Pi resta collegato alla presa e può essere riacceso dal pulsante o dai pad J2. Senza questa impostazione il consumo in halt sarebbe più alto.
+
+Verifica:
 
 ```bash
 sudo rpi-eeprom-config
@@ -55,15 +61,15 @@ sudo rpi-eeprom-config
 
 ## 3. Pad J2 (pulsante esterno)
 
-I pad **J2** (tra il connettore della batteria RTC e il bordo della scheda) servono ad aggiungere un pulsante esterno: **chiudere brevemente i due pad** equivale a premere il pulsante di accensione a bordo.
+I pad **J2** simulano il pulsante di accensione: chiusura breve dei due pad.
 
-| Situazione | Effetto di una chiusura breve |
-|------------|-------------------------------|
-| Pi in halt (alimentato) | Riavvio |
-| Pi acceso (Raspberry Pi OS Lite) | Avvio dello **shutdown** |
-| Pressione prolungata (~1 s+) | Spegnimento forzato (hard off) |
+| Situazione | Effetto |
+|------------|---------|
+| Pi in halt | Riavvio |
+| Pi acceso (OS Lite) | Avvio shutdown |
+| Pressione ~1 s+ | Hard off |
 
-Per questo l’ESP **non deve** dare l’impulso WAKE senza conoscere lo stato del Pi: serve la linea **ALIVE** (vedi sotto e [espconfig.md](espconfig.md)).
+L’ESP **non** deve dare WAKE senza conoscere lo stato del Pi → linea **ALIVE** ([espconfig.md](espconfig.md)).
 
 ---
 
@@ -71,58 +77,49 @@ Per questo l’ESP **non deve** dare l’impulso WAKE senza conoscere lo stato d
 
 File: `/boot/firmware/config.txt` (Bookworm).
 
-Aggiungi:
-
 ```
 gpio=17=op,dh
 ```
 
-| Significato | Dettaglio |
-|-------------|-----------|
-| `op` | GPIO17 come output |
-| `dh` | Drive high (alto) |
+GPIO17 alto già all’avvio; in halt con `POWER_OFF_ON_HALT=1` il rail 3,3 V è spento → linea bassa. Lato ESP: pulldown (vedi espconfig).
 
-Il firmware porta GPIO17 **alto già all’avvio**. In halt, con `POWER_OFF_ON_HALT=1`, il rail 3,3 V è spento: la linea va bassa. Lato ESP serve una **pulldown** (documentata in espconfig).
-
-Cablaggio proposto: **GPIO17 (Pi) → GPIO13 (ESP)**.
+Cablaggio proposto: **GPIO17 (Pi) → pin ALIVE sull’ESP**.
 
 ---
 
-## 5. Interfacce hardware per i sensori
+## 5. Interfacce hardware per i sensori sul Pi
 
-Il GPIO del Pi è **digitale only** (3.3 V, alto/basso). I tuoi sensori richiedono interfacce miste:
+Per piano, sul Raspberry restano: **metano, umidità suolo, monitoraggio acqua, GPS** (e moduli futuri).  
+Il **BME280 non è sul Pi**: è collegato **solo all’ESP32**; il Pi riceve T/umidità/pressione dall’ESP (protocollo da consolidare).
+
+Il GPIO del Pi è digitale 3,3 V. Interfacce tipiche:
 
 | Sensore | Interfaccia | Abilita con |
 |---------|-------------|-------------|
-| BME280 (pressione/temp/umidità) | I2C | `i2c` |
-| GPS (NMEA seriale) | UART | `uart` |
-| Umidità suolo / metano (analog) | SPI + ADC esterno (es. MCP3008) | `spi` |
+| GPS (NMEA) | UART | `uart` |
+| Umidità suolo / metano (analog) | SPI + ADC (es. MCP3008) | `spi` |
 | Acqua (switch digitale) | GPIO | già disponibile |
+| BME280 | — | **non** su I2C del Pi (solo ESP) |
 
-### Opzione A — `raspi-config` (consigliato)
+> **I2C / UART / SPI in breve:** sono diversi modi per far dialogare il Pi con i sensori. **I2C** serve per il BME280 (ma in campo il BME280 sta solo sull'ESP32, non sul Pi). **UART** serve per il GPS, che parla in formato NMEA. **SPI** serve per leggere sensori analogici (suolo, metano) tramite un convertitore ADC come l'MCP3008, perché il Pi ha solo pin digitali e non sa leggere tensioni direttamente.
+
+I2C sul Pi può restare abilitato per eventuali altri moduli; non usarlo per il BME di campo.
+
+### Opzione A — `raspi-config`
 
 ```bash
 sudo raspi-config
 ```
 
-Vai in **Interfacing Options** e abilita:
-- `I2C` → Sì
-- `SPI` → Sì (solo se usi un ADC esterno per i sensori analogici)
-- `Serial Port` → **No** alla login shell su seriale, **Sì** all’hardware seriale
+**Interfacing Options:** SPI Sì (se ADC); Serial Port → login shell **No**, hardware seriale **Sì**.
 
-Questo libera `/dev/ttyAMA0` o `/dev/ttyS0` per il GPS.
-
-### Opzione B — modifica manuale di `/boot/firmware/config.txt`
-
-Aggiungi (o decommenta) queste righe:
+### Opzione B — `/boot/firmware/config.txt`
 
 ```ini
-dtparam=i2c_arm=on
 dtparam=spi=on
 enable_uart=1
+# dtparam=i2c_arm=on   # solo se servono altri dispositivi I2C sul Pi
 ```
-
-Poi riavvia:
 
 ```bash
 sudo reboot
@@ -132,174 +129,112 @@ sudo reboot
 
 ## 6. Permessi utente
 
-Lo script sensori ha bisogno di accesso ai dispositivi I2C, porte seriali e GPIO. Aggiungi l’utente ai gruppi richiesti:
-
 ```bash
-sudo usermod -aG i2c,dialout,gpio $USER
+sudo usermod -aG dialout,gpio $USER
+# se usi I2C per altri moduli: aggiungi anche i2c
+# sudo usermod -aG i2c,dialout,gpio $USER
 ```
 
-Effettua il logout e login di nuovo (o riavvia) perché le modifiche ai gruppi abbiano effetto.
+> **dialout / gpio / i2c in breve:** sono gruppi di utenti Linux che danno il permesso di usare porte seriali (`dialout`), pin GPIO (`gpio`) e bus I2C (`i2c`). Senza di essi lo script Python non può accedere all'hardware.
 
-Verifica:
-
-```bash
-groups
-```
+Logout/login o reboot, poi `groups`.
 
 ---
 
 ## 7. Dipendenze Python
 
-```bash
-sudo apt install -y python3-pip python3-smbus i2c-tools
-pip3 install --break-system-packages gpiozero adafruit-circuitpython-bme280 pyserial
-```
-
-Note:
-- `i2c-tools` fornisce `i2cdetect` (comando di verifica sotto).
-- `gpiozero` serve per la lettura digitale del sensore acqua.
-- `adafruit-circuitpython-bme280` è la libreria consigliata per BME280.
-- `pyserial` legge le frasi NMEA dal GPS su UART.
-- Se usi un ADC MCP3008 per sensori analogici (suolo/metano), installa anche:
-  ```bash
-  pip3 install --break-system-packages adafruit-circuitpython-mcp3xxx spidev
-  ```
-
-Su Bookworm (64-bit), i pacchetti pip possono richiedere `--break-system-packages` oppure un ambiente virtuale. Per un progetto di tesi è preferibile il venv:
+Preferire un venv:
 
 ```bash
 python3 -m venv ~/venv
 source ~/venv/bin/activate
-pip install gpiozero adafruit-circuitpython-bme280 pyserial adafruit-circuitpython-mcp3xxx spidev
+pip install gpiozero pyserial adafruit-circuitpython-mcp3xxx spidev
 ```
+
+| Pacchetto | Uso |
+|-----------|-----|
+| `gpiozero` | Sensore acqua digitale |
+| `pyserial` | GPS NMEA |
+| `adafruit-circuitpython-mcp3xxx` / `spidev` | ADC per suolo/metano |
+
+La lettura BME sul Pi (librerie Adafruit/smbus) serve solo in laboratorio se si testa un BME temporaneo sul Pi; in campo i dati BME arrivano dall’ESP.
 
 ---
 
-## 8. Verifica interfacce e rilevamento sensori
-
-### Scan bus I2C — `i2cdetect -y 1`
+## 8. Verifica interfacce
 
 ```bash
-i2cdetect -y 1
-```
-
-**Cosa fa:** scandisce il bus I2C 1 (bus principale del Pi) e stampa una tabella degli indirizzi dove ha risposto un dispositivo.
-
-**Cosa cercare:**
-- BME280 risponde tipicamente a `0x76` o `0x77`.
-- Se vedi solo `--`, I2C non funziona o nulla è cablato.
-- Se vedi `UU`, l’indirizzo è in uso da un driver kernel (solitamente va bene).
-
-### Dispositivi seriali — `ls /dev/tty*`
-
-```bash
-ls /dev/tty*
-```
-
-**Cosa fa:** elenca tutti i dispositivi seriali/TTY.
-
-**Cosa cercare:**
-- `/dev/ttyAMA0` — UART principale su Pi 5 (probabile GPS se cablato su GPIO 14/15).
-- `/dev/ttyS0` — UART secondario/mini.
-- `/dev/ttyUSB0` — se il GPS usa un adattatore USB-seriale.
-
-Se non vedi il dispositivo atteso, controlla il cablaggio e che `enable_uart=1` sia impostato.
-
-### Sanity check camera
-
-```bash
+ls /dev/tty*          # GPS: ttyAMA0 / ttyS0 / ttyUSB0
+# i2cdetect -y 1      # non aspettarsi il BME di campo sul Pi
 rpicam-still -o test.jpg --timeout 2000
-ls -lh test.jpg
 ```
+
+Quando il protocollo ESP→Pi sarà definito, verificare anche ricezione di un pacchetto BME con timestamp.
 
 ---
 
-## 9. Cattura al boot e ritorno in halt
+## 9. Due modalità software
 
-Niente server HTTP: al boot il Pi esegue la cattura (Camera Module 3) e poi torna in halt.
+### 9.1 App selettiva (energy-aware) — oneshot + halt
 
-### 9.1 Storage foto
+Al boot: cattura (e letture sensori Pi se previste) → `poweroff`.
 
-Il client in repo salva in:
+Storage foto:
 
 ```
 static/uploads/images/rpi_YYYYMMDD-HHMMSS.jpg
 ```
 
-Assicurati che la working directory del servizio sia la root del progetto (dove esistono `capture_rpi.sh` e, a regime, il pacchetto `backend`).
-
-### 9.2 Script
+Script:
 
 - [`capture_rpi.sh`](capture_rpi.sh) — attiva Python e lancia il client
-- [`capture_client.txt`](capture_client.txt) — scatto via `rpicam-still` / `libcamera-still`
-
-In modalità energy-aware usare **`--oneshot`**.
-
-Esempio manuale (dopo pyenv/venv configurati):
+- `backend/capture_client` — scatto via `rpicam-still`
 
 ```bash
 ./capture_rpi.sh --oneshot
 sudo systemctl poweroff
 ```
 
-### 9.3 Unità systemd (esempio)
-
-Adatta i path (`WorkingDirectory`, path dello script) alla macchina `rpi5-03`.
-
-Il file servizio è nel repo: [`scripts and configuration/insect-capture.service`](insect-capture.service).
-
-Copia in `/etc/systemd/system/insect-capture.service` (adatta `User` e path se diversi):
-
-```ini
-[Unit]
-Description=One-shot insect capture after wake, then halt
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=rpi5-03
-WorkingDirectory=/home/rpi5-03/tesi
-Environment=PROJECT_DIR=/home/rpi5-03/tesi
-EnvironmentFile=-/home/rpi5-03/tesi/.env.systemd
-ExecStart=/home/rpi5-03/tesi/capture_rpi.sh --oneshot
-ExecStartPost=/bin/systemctl poweroff
-RemainAfterExit=no
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Abilitazione:
+Unità di esempio: [`insect-capture.service`](insect-capture.service).
 
 ```bash
+sudo cp "scripts and configuration/insect-capture.service" /etc/systemd/system/
+# adatta User e path
 sudo systemctl daemon-reload
 sudo systemctl enable insect-capture.service
 ```
 
-Note:
+Per test lunghi: disabilita il servizio o togli il `poweroff`.
 
-- `ExecStartPost=... poweroff` spegne anche se vuoi distinguere fallimento cattura vs successo: in quel caso usa uno script wrapper che fa poweroff solo su exit 0, oppure un secondo oneshot `OnSuccess=`.
-- Per sessioni di test lunghe, **disabilita** temporaneamente il servizio o commenta il `poweroff`.
-- I moduli `backend.*` richiesti da `capture_client` sono ora nel repo in `scripts and configuration/backend/`.
-
-### 9.4 `.env.systemd` (opzionale)
-
-Esempio nella root del progetto sul Pi:
+Variabili: copia [`.env.systemd.example`](.env.systemd.example) in `.env.systemd` nella root del progetto sul Pi.
 
 ```bash
+CAPTURE_MODE=selective   # oneshot + halt
 CAPTURE_INTERVAL=30
-# PYENV_VERSION=3.11.x
-# PYENV_ROOT=/home/rpi5-03/.pyenv
 ```
 
-Caricato automaticamente da `capture_rpi.sh` se il file esiste.
+### 9.2 App continuativa (dataset)
+
+Il Pi resta acceso nella finestra giornaliera (es. mattina–sera). Cadenze **indipendenti** e configurabili, ad esempio:
+
+| Flusso | Esempio |
+|--------|---------|
+| Misure ambientali | ogni 1 min (BME via ESP + sensori sul Pi) |
+| Fotografie | ogni 5 min (una o entrambe le camere) |
+
+Da implementare: timer/cron o servizi systemd periodici, database con id/timestamp, sync orologi ESP/Pi. Non usare `insect-capture.service` con `poweroff` in questa modalità.
+
+```bash
+CAPTURE_MODE=continuous
+CAPTURE_INTERVAL=300          # secondi tra foto
+SENSOR_INTERVAL=60            # secondi tra burst sensori
+# DAILY_WINDOW_START=06:00
+# DAILY_WINDOW_END=20:00
+```
 
 ---
 
-## 10. Directory dati per i sensori
-
-Lo script sensori scrive il CSV qui (e il client foto scrive in `static/uploads/images/`):
+## 10. Directory dati
 
 ```bash
 mkdir -p ~/tesi/static/uploads/images ~/tesi/data
@@ -308,38 +243,35 @@ chmod 755 ~/tesi/data
 
 ---
 
-## 11. Eseguire lo script sensori (oneshot)
-
-Dalla root del repo:
+## 11. Script sensori sul Pi
 
 ```bash
 cd ~/tesi
-python3 sensors.py
-# oppure, se usi un venv:
 source ~/venv/bin/activate
-python3 sensors.py
+python3 "scripts and configuration/sensors.py"
 ```
 
-Legge tutti i sensori una volta, aggiunge una riga a `data/sensors.csv` ed esce. È progettato per essere chiamato da `capture_rpi.sh --oneshot` durante la finestra in cui il Pi è sveglio, seguito da `poweroff`.
+Legge i sensori **hostati sul Pi** (GPS, acqua, suolo, metano). Il campo BME nel CSV andrà popolato dai dati ricevuti dall’ESP quando il protocollo sarà pronto. Dettaglio: [pyexplanation.md](pyexplanation.md).
 
 ---
 
-## 12. Checklist rapida prima del primo esecuzione
+## 12. Checklist rapida
 
-- [ ] Sistema aggiornato e riavviato
-- [ ] I2C, SPI, UART abilitati in `config.txt` / `raspi-config`
-- [ ] Utente nei gruppi `i2c`, `dialout`, `gpio`
-- [ ] Dipendenze Python installate
-- [ ] `i2cdetect -y 1` mostra BME280 (`0x76` o `0x77`) se cablato
-- [ ] `ls /dev/tty*` mostra il dispositivo seriale del GPS
-- [ ] Test foto camera riuscito
-- [ ] `~/tesi/data` esiste per l’output CSV
-- [ ] `SENSORS` in `sensors.py` corrisponde al cablaggio reale (pin, indirizzo, porta)
+- [ ] Sistema aggiornato
+- [ ] EEPROM halt configurata
+- [ ] ALIVE in `config.txt`
+- [ ] SPI/UART (e I2C solo se serve) abilitati
+- [ ] Utente nei gruppi giusti
+- [ ] Test camera Module 3; seconda camera quando disponibile
+- [ ] `~/tesi/data` presente
+- [ ] Modalità scelta: selettiva (systemd + poweroff) o continuativa (niente poweroff automatico)
+- [ ] BME di campo **non** cablato sull’I2C del Pi
 
 ---
 
 ## 13. Cosa non configurare qui
 
-- Trasferimento foto dall’ESP via HTTP — **non previsto**
-- Wake via GPIO3 “alla Pi 4” — **non applicabile** al Pi 5
+- BME280 diretto sul Pi in installazione di campo — **solo ESP**
+- Wake via GPIO3 “alla Pi 4” — **non applicabile**
 - Deep sleep del kernel — **non supportato**
+- Taglio alimentazione Pi prima del completamento di `poweroff` — da evitare (sequenza concordata con ESP)

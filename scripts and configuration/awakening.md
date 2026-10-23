@@ -1,42 +1,37 @@
-# ⚠️ LEGACY — Pi 4 Style Wake (GPIO3 + UART)
+# LEGACY — wake stile Pi 4 (GPIO3 + UART)
 
-> **This document describes the Raspberry Pi 4 wake approach (GPIO3 + UART).**
-> **It does NOT apply to Raspberry Pi 5.**
+> **Non applicare al Raspberry Pi 5 né al piano operativo attuale.**
 >
-> For Pi 5, the wake mechanism uses **J2 pads + optocoupler** (hardware button simulation)
-> with **ALIVE line (GPIO17 → ESP GPIO13)** for state sensing.
+> Documento storico. Sul Pi 5 il wake usa **pad J2 + optoaccoppiatore** e la linea **ALIVE**;
+> l'ESP decide il wake con **forecaster/decider** sui dati **BME280** (non con UART di evento come qui sotto).
 >
-> **Current documentation:**
-> - ESP32 side: [espconfig.md](espconfig.md)
-> - Pi side: [piconfig.md](piconfig.md)
+> **Perché non si usa sul Pi 5:** sul Pi 4 il wake si faceva portando GPIO3 a massa; sul Pi 5 quel pin non ha questa funzione e l'accensione avviene tramite pad J2 o pulsante fisico. Inoltre il Pi 5 non supporta `WAKE_ON_GPIO=1`. Questo documento è solo un riferimento storico.
+>
+> Documentazione corrente:
+> - Piano: [`plan.pdf`](../plan.pdf)
+> - Panoramica: [README.md](../README.md)
+> - ESP: [espconfig.md](espconfig.md)
+> - Pi: [piconfig.md](piconfig.md)
 > - Firmware: [`esp32/src/main.cpp`](../esp32/src/main.cpp)
 
 ---
 
-## Original Content (Pi 4 / Historical Reference)
+## Contenuto originale (riferimento Pi 4)
 
-### Come funziona il risveglio (Pi 4)
+### Come funzionava il risveglio (Pi 4)
 
-Il Pi 4 in halt non esegue software, quindi non può ricevere dati via seriale. Il risveglio è un evento hardware: il Pi si riavvia quando il GPIO3 (pin fisico 5) viene portato a massa. La UART serve solo dopo il boot, per scambiare messaggi.
+Il Pi 4 in halt non esegue software: il risveglio è hardware quando **GPIO3** (pin 5) va a massa. La UART serve solo dopo il boot.
 
-1. L'ESP32 rileva l'evento.
-2. L'ESP32 porta GPIO3 del Pi a LOW per circa 100-200 ms.
-3. Il Pi si avvia (circa 20-30 secondi) e parte il tuo servizio.
-4. Da qui in poi la comunicazione avviene via UART.
+1. L’ESP rileva l’evento.
+2. Porta GPIO3 del Pi a LOW per ~100–200 ms.
+3. Il Pi si avvia (~20–30 s).
+4. Poi comunicazione via UART.
 
-I messaggi inviati dall'ESP32 durante il boot vanno persi. Se servono, l'ESP32 deve rimandarli finché non riceve una conferma dal Pi.
+I messaggi durante il boot vanno persi: l’ESP deve ritrasmettere fino a conferma.
 
-### Software sull'ESP32 (Pi 4 version)
+### Firmware ESP (versione Pi 4)
 
-#### Strumenti
-
-- Arduino IDE con il pacchetto "esp32 by Espressif", oppure PlatformIO. Sono la scelta più semplice.
-- Driver USB-seriale (CP210x o CH340), a seconda della scheda.
-- Libreria `esp_camera` (inclusa nel pacchetto esp32) se leggi la camera dell'ESP32-CAM.
-
-#### Firmware
-
-Esempio in Arduino, adatta i pin alla tua scheda.
+Strumenti: Arduino IDE / PlatformIO, driver USB-seriale, eventuali librerie camera.
 
 ```cpp
 const int WAKE_PIN = 14;      // collegato a GPIO3 del Pi
@@ -56,85 +51,23 @@ void wakePi() {
 }
 
 void loop() {
-  if (eventoRilevato()) {     // la tua logica di detection
+  if (eventoRilevato()) {
     wakePi();
     Serial2.println("EVENT");
-    // attendi che il Pi sia pronto prima di inviare altro
   }
 }
 ```
 
-Il pin va rilasciato (INPUT) dopo l'impulso, mai tenuto a HIGH, perché sul Pi c'è già un pull-up verso 3,3 V.
+Rilasciare il pin (INPUT) dopo l’impulso; non tenerlo HIGH (pull-up 3,3 V sul Pi).
 
-Sull'ESP32-CAM molti pin sono occupati da camera e microSD. Se usi la scheda in modalità 1-bit, restano liberi alcuni GPIO tra 12, 13, 14 e 15. Serve il modello esatto della scheda per indicare i pin sicuri.
+### Lato Raspberry (versione storica)
 
-### Software sul Raspberry Pi 5 (Pi 4 version)
+1. `raspi-config` → Serial: login shell No, hardware Sì → `/dev/serial0`.
+2. EEPROM: su Pi 4 `WAKE_ON_GPIO=1` di default. Su Pi 5 questo path **non** vale.
+3. Listener Python su UART + unità systemd (esempio storico omesso nei dettagli di deploy: non usare in produzione Pi 5).
 
-#### 1. Abilitare la UART
+### Verifiche (solo se si ripete un banco Pi 4)
 
-```bash
-sudo raspi-config
-```
-
-Interface Options, Serial Port: login shell su seriale NO, hardware seriale SÌ. Dopo il riavvio la porta è `/dev/serial0` (collegata a GPIO14/15).
-
-#### 2. Configurare l'EEPROM (opzionale)
-
-```bash
-sudo rpi-eeprom-config --edit
-```
-
-`WAKE_ON_GPIO=1` è già il valore predefinito, quindi il wake da GPIO3 funziona senza modifiche. `POWER_OFF_ON_HALT=1` serve solo se vuoi il minimo consumo in halt, perché spegne anche le porte USB. Non è un requisito per il wake.
-
-#### 3. Pacchetti
-
-```bash
-sudo apt install python3-serial
-```
-
-Se usi la Camera Module 3 sul Pi, serve anche `python3-picamera2`, già presente in Raspberry Pi OS Bookworm.
-
-#### 4. Servizio che ascolta l'ESP32
-
-```python
-# /home/pi/listener.py
-import serial
-
-with serial.Serial("/dev/serial0", 115200, timeout=1) as s:
-    s.write(b"READY\n")                 // conferma all'ESP32 che il Pi è sveglio
-    while True:
-        line = s.readline().decode().strip()
-        if line == "EVENT":
-            print("Evento ricevuto")    // qui la tua logica
-```
-
-Per avviarlo automaticamente al boot, crea `/etc/systemd/system/listener.service`:
-
-```ini
-[Unit]
-Description=Listener ESP32
-
-[Service]
-ExecStart=/usr/bin/python3 /home/pi/listener.py
-Restart=always
-User=pi
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Poi attivalo con:
-
-```bash
-sudo systemctl enable --now listener.service
-```
-
-#### 5. Tornare in halt
-
-Quando il Pi ha finito, può spegnersi con `sudo shutdown -h now`, magari dopo aver mandato un messaggio all'ESP32 per segnalare che è di nuovo in halt.
-
-### Verifiche consigliate
-
-- Prima testa il wake da solo: collega manualmente GPIO3 a GND con un filo, con il Pi in halt, e controlla che si riavvii.
-- Poi testa la UART con un loopback o con `screen /dev/serial0 115200`.
-- Se usi I2C sul Pi, ricorda che GPIO3 è anche SCL (I2C1): evita di collegarci altri dispositivi.
+- Wake manuale GPIO3→GND a Pi in halt.
+- Loopback UART / `screen /dev/serial0 115200`.
+- Attenzione: GPIO3 è anche SCL I2C1.

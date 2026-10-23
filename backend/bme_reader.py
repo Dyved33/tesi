@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-BME280 sensor reader for backend package.
+BME280 reading helper for the backend package.
 
-Provides get_bme280_reading() compatible with capture_client.py expectations.
-Wraps the sensor reading logic from sensors.py.
+Per plan.pdf the field BME280 is attached only to the ESP32; the Pi should
+consume forwarded samples (with measurement timestamp). This module still
+supports direct I2C on the Pi for bench tests and for capture_client.py until
+the ESP→Pi protocol is in place.
+
+Provides get_bme280_reading() compatible with capture_client.py.
 """
 
 import logging

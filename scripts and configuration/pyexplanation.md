@@ -1,138 +1,122 @@
-# pyexplanation — sensors.py walkthrough
+# pyexplanation — walkthrough di `sensors.py`
 
-This document explains `sensors.py`, the one-shot environmental reader for the
-Raspberry Pi 5 thesis. Read it before deploying, and update it if you change
-sensor models or wiring.
+Spiega `sensors.py`, il lettore oneshot dei sensori **collegati al Raspberry Pi**.  
+Allineato a [`plan.pdf`](../plan.pdf): il **BME280 non è sul Pi** (solo ESP32); questo script gestisce GPS, acqua, suolo, metano e lascia uno slot per i valori BME ricevuti dall’ESP.
 
----
+Vedi anche: [piconfig.md](piconfig.md), [espconfig.md](espconfig.md).
 
-## Purpose
-
-The Pi is normally in **halt** (~0.01 W) and is woken by the ESP32-CAM only when
-an insect event is detected. While the Pi is awake, this script must:
-
-1. Read **every available sensor** in one fast burst.
-2. Append one row to a **CSV** file (`data/sensors.csv`).
-3. Exit cleanly so `capture_rpi.sh --oneshot` can proceed to `poweroff`.
-
-It is **not** a daemon and does **not** loop continuously.
+> **In breve:** `sensors.py` legge una tantum (burst) i sensori collegati al Raspberry Pi (GPS, acqua, suolo, metano), scrive una riga in `data/sensors.csv` ed esce. Non è un demone: non resta in attesa in un loop. Il BME280 non è letto direttamente qui perché in campo sta sull'ESP32; i suoi valori arrivano al Pi tramite il protocollo ESP→Pi (ancora da definire).
 
 ---
 
-## File structure
+## Scopo
 
-| Section | What it does |
-|---------|--------------|
-| `SENSORS` dict | Configuration: enabled flags, GPIO pins, I2C addresses, UART port, ADC channels. Edit this to match your actual wiring. |
-| `CSV_PATH` / `CSV_HEADER` | Where and how results are stored (one row per wake cycle). |
-| `now_iso()`, `ensure_csv()`, `append_row()` | Helpers: timestamp in ISO 8601 UTC, create CSV with header if missing, append a row. |
-| `read_bme280()` ... `read_methane()` | PRIMARY reader functions, one per sensor type, using the recommended libraries. |
-| `read_*_dummy()`, `read_*_rpigpio()`, `read_adc_spidev()` ... | ALTERNATIVE reader functions, delimited by `////////////////////` blocks. Use these if the primary library is unavailable or your hardware differs. |
-| `read_sensor_with_fallback()` | Tries the primary reader, then an alternative chosen by `SENSORS[...]["library"]`; falls back to dummy if everything fails. |
-| `main()` | Reads all enabled sensors, builds a CSV row, writes it, prints a summary, exits 0/1. |
+Nella **app selettiva** il Pi è in halt e viene svegliato dall’ESP quando il decider autorizza. Mentre è acceso, lo script:
+
+1. legge i sensori hostati sul Pi in un burst rapido;
+2. appende una riga a `data/sensors.csv`;
+3. esce in modo che la pipeline possa procedere al `poweroff`.
+
+Nella **app continuativa** può essere chiamato a cadenza (es. ogni minuto), senza poweroff.
+
+Non è un demone: non resta in loop interno (salvo future varianti).
 
 ---
 
-## The `# ===` alternative blocks
+## Struttura del file
 
-Each sensor has **one or more alternative implementations** wrapped between `# ============================================================` comment lines. Example:
+| Sezione | Contenuto |
+|---------|-----------|
+| `SENSORS` | Flag, pin, porte UART, canali ADC. Adattare al cablaggio reale |
+| `CSV_PATH` / `CSV_HEADER` | Una riga per ciclo di lettura |
+| Helper | Timestamp ISO UTC, create/append CSV |
+| `read_*` primari | Implementazioni consigliate |
+| Blocchi `====` | Alternative (altra libreria / dummy) |
+| `main()` | Legge i sensori abilitati, scrive CSV, exit 0/1 |
+
+---
+
+## BME280 e piano operativo
+
+| Dove | Cosa |
+|------|------|
+| Installazione di campo | BME **solo sull’ESP**; case esterno |
+| Questo script | Colonna BME nel CSV: da popolare con dati **inoltrati dall’ESP** (timestamp di misura distinto da ricezione) |
+| Config `SENSORS["bme280"]` | Se `enabled` e ancora su I2C locale → solo per **prove al banco** con un BME temporaneo sul Pi. In campo: disabilitare lettura I2C locale e usare il path ESP |
+
+Finché il protocollo ESP→Pi non è pronto, i campi BME possono restare vuoti o dummy senza far fallire l’intero burst.
+
+---
+
+## Alternative `# ===`
+
+Ogni sensore ha alternative tra commenti `# ============================================================`.
+
+| Sensore | Primario | Alternative |
+|---------|----------|-------------|
+| BME280 (banco) | Adafruit I2C | smbus2, dummy / **futuro: da ESP** |
+| GPS | pyserial NMEA `$GPGGA` | dummy |
+| Acqua | gpiozero | RPi.GPIO, dummy |
+| Suolo | MCP3008 Adafruit | spidev raw, GPIO digital, dummy |
+| Metano | MCP3008 Adafruit | spidev raw, GPIO DO, dummy |
+
+Esempio switch:
 
 ```python
-# ============================================================
-# ALTERNATIVE BME280: raw SMBus read ...
-def read_bme280_smbus() -> dict:
-    ...
-# ============================================================
+"library": "dummy"     # nessun hardware ancora
+"library": "spidev_raw"
 ```
 
-**Why:** You do not yet know the exact sensor models or pinout. The script
-therefore supports the most common options for each sensor type:
+> **Dummy in breve:** “dummy” è un'implementazione fittizia che restituisce valori di esempio senza hardware reale. Serve per sviluppare e testare lo script anche quando i sensori non sono ancora collegati.
 
-| Sensor | Primary | Alternatives |
-|--------|---------|--------------|
-| BME280 | Adafruit CircuitPython (I2C) | `smbus2` raw read, dummy |
-| GPS | `pyserial` NMEA `$GPGGA` parsing | dummy |
-| Water | `gpiozero` digital input | `RPi.GPIO`, dummy |
-| Soil moisture | MCP3008 ADC via Adafruit lib | `spidev` raw, GPIO digital, dummy |
-| Methane | MCP3008 ADC via Adafruit lib | `spidev` raw, GPIO digital DO, dummy |
-
-To switch to an alternative, change the `"library"` field in `SENSORS`, e.g.:
-
-```python
-"library": "smbus"        # BME280 via smbus2 instead of Adafruit
-"library": "spidev_raw"   # Soil moisture via raw spidev instead of Adafruit MCP3xxx
-```
-
-If nothing is wired yet or a sensor is missing, the **dummy** alternative
-returns `None` so the script still runs and produces a CSV row with empty fields.
+> **Oneshot in breve:** una lettura “oneshot” viene eseguita una sola volta e poi il programma termina. È diversa da un demone, che resta in esecuzione in background in attesa di eventi.
 
 ---
 
-## CSV output
+## CSV
 
-One row per wake cycle in `data/sensors.csv`:
-
-| Column | Meaning |
-|--------|---------|
-| `timestamp_iso` | UTC ISO 8601 timestamp of the reading burst |
-| `bme280_temperature_c` / `_humidity_pct` / `_pressure_hpa` | BME280 environmental data |
-| `gps_latitude` / `gps_longitude` / `gps_altitude_m` / `gps_satellites` | GPS fix (NMEA `$GPGGA`) |
-| `water_present_bool` | Digital water detection (True/False) |
-| `soil_moisture_voltage` / `_percent` | ADC voltage and rough % (0–100) |
-| `methane_voltage` / `_ppm_approx` | ADC voltage; ppm left `None` until calibrated |
-| `sensors_ok` | Comma-separated list of sensors that returned data |
-| `sensors_failed` | Comma-separated list of sensors that failed |
-
-Missing sensors produce empty cells, not errors.
+| Colonna | Significato |
+|---------|-------------|
+| `timestamp_iso` | Istante del burst (UTC) |
+| `bme280_*` | Da ESP in campo (o I2C locale solo in banco) |
+| `gps_*` | Fix NMEA |
+| `water_present_bool` | Presenza/livello (funzione da precisare in piano) |
+| `soil_moisture_*` | ADC / % grezza |
+| `methane_*` | Tensione; ppm dopo calibrazione |
+| `sensors_ok` / `sensors_failed` | Elenco esiti |
 
 ---
 
-## How to run
+## Esecuzione
 
 ```bash
 cd ~/tesi
-python3 sensors.py
-```
-
-If using a venv:
-
-```bash
 source ~/venv/bin/activate
-python3 sensors.py
+python3 "scripts and configuration/sensors.py"
 ```
 
-Expected output:
-
-```
-[sensors] Wrote row to /home/rpi5-03/tesi/data/sensors.csv
-[sensors] OK: ['bme280', 'gps', 'water', 'soil_moisture', 'methane'] | FAILED: []
-```
-
-Exit code: `0` if all enabled sensors succeeded, `1` if any failed (still writes the row with what it could read).
+Exit `0` se tutti i sensori abilitati ok, `1` se qualcuno fallisce (la riga viene comunque scritta con i campi disponibili).
 
 ---
 
-## Integration with `capture_rpi.sh` and photo metadata
+## Integrazione con la cattura
 
-The existing `capture_rpi.sh --oneshot` launches `python -m backend.capture_client`, which snaps a photo and already attempts to attach BME280 and GPS readings to the image metadata via `backend.photo_metadata`.
-
-**What "embedding in photo metadata" means:** your capture pipeline can store the same sensor values alongside each photo — either in a sidecar JSON file (same timestamp, e.g. `rpi_20261019-124900.json`) or inside the image EXIF — so every insect photo carries its environmental context (temperature, humidity, GPS, etc.). The CSV from `sensors.py` and the photo metadata can be linked by timestamp. You do not have to do this now; it is a "yes, later" item.
+`capture_rpi.sh --oneshot` lancia `python -m backend.capture_client`, che può allegare metadati ambientali alla foto. Target: stessi valori BME provenienti dall’ESP e letture dei sensori Pi, collegabili per timestamp al DB del dataset.
 
 ---
 
-## Calibration notes (thesis-relevant)
+## Calibrazione
 
-- **MQ methane sensor:** raw voltage is not ppm. You must calibrate `R0` in clean air and apply the sensor's curve (see datasheet). The script returns voltage only; add ppm conversion once you have calibration data.
-- **Soil moisture:** the percent conversion is linear (voltage / Vref × 100). Calibrate against dry and saturated soil for meaningful numbers.
-- **BME280:** the Adafruit library handles compensation automatically; the SMBus alternative does **not** and returns raw/uncompensated values unless you implement the full compensation algorithm from the BME280 datasheet.
+- **MQ metano:** tensione ≠ ppm; calibrare R0 e curva del datasheet.
+- **Suolo:** % lineare solo grezza; calibrare su secco/saturo.
+- **BME:** compensazione a carico del firmware ESP (o libreria Adafruit se in banco sul Pi).
 
 ---
 
-## What to verify before first field run
+## Prima di un run in campo
 
-1. `piconf.md` steps 1–7 completed (interfaces enabled, permissions, dependencies).
-2. `i2cdetect -y 1` shows the BME280 address (`0x76` or `0x77`).
-3. `ls /dev/tty*` shows the GPS serial device.
-4. `SENSORS` dict pins/addresses match your actual wiring.
-5. Run `python3 sensors.py` manually once and confirm `data/sensors.csv` gets a row.
-6. Test the full cycle: wake impulse → boot → `capture_rpi.sh --oneshot` → photo + sensor CSV → `poweroff`.
+1. Passi halt/ALIVE/interfacce in [piconfig.md](piconfig.md).
+2. BME di campo cablato sull’ESP, non sull’I2C del Pi ([espconfig.md](espconfig.md)).
+3. `SENSORS` allineato al cablaggio reale; BME I2C locale off in produzione.
+4. Un `sensors.py` manuale → riga in `data/sensors.csv`.
+5. Ciclo selettivo: wake → boot → cattura + sensori → poweroff; oppure cadenze continuative senza poweroff.

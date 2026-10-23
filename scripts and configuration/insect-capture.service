@@ -1,5 +1,9 @@
+# Selective acquisition (energy study / TMC-style): one capture after wake, then halt.
+# Do NOT enable this unit for continuous dataset mode (no automatic poweroff there).
+# Docs: piconfig.md, plan.pdf
+
 [Unit]
-Description=One-shot insect capture after wake, then halt
+Description=Selective oneshot capture after ESP wake, then halt
 After=network-online.target
 Wants=network-online.target
 
@@ -8,6 +12,7 @@ Type=oneshot
 User=rpi5-03
 WorkingDirectory=/home/rpi5-03/tesi
 Environment=PROJECT_DIR=/home/rpi5-03/tesi
+Environment=CAPTURE_MODE=selective
 EnvironmentFile=-/home/rpi5-03/tesi/.env.systemd
 ExecStart=/home/rpi5-03/tesi/capture_rpi.sh --oneshot
 ExecStartPost=/bin/systemctl poweroff
