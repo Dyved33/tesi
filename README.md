@@ -5,10 +5,13 @@ Documentazione di avanzamento del progetto di tesi, allineata al piano operativo
 **Tesisti:** David Cardinali e Tommaso Garofani  
 **Relatore:** Francesco Betti Sorbelli  
 **Correlatori:** Lorenzo Palazzetti e Cristina M. Pinotti  
-**Documento di riferimento:** [`plan.pdf`](plan.pdf) (19 ottobre 2026)
+**Piano operativo:** [`plan.pdf`](plan.pdf) (19 ottobre 2026)
+
+**Riferimento scientifico per l’acquisizione selettiva:** [`main.pdf`](main.pdf), manoscritto sul controllo biology-aware del wake-up
 
 **Guide di configurazione:**
 
+- [Guida ai componenti software](CODE_GUIDE.md) — spiegazione di firmware, script, moduli Python e configurazioni
 - [Configurazione Raspberry Pi](scripts%20and%20configuration/piconfig.md) — spegnimento a basso consumo, linea ALIVE, sensori sul Pi, avvio automatico, cattura
 - [Configurazione ESP32](scripts%20and%20configuration/espconfig.md) — BME280, segnali di risveglio, previsione e decisione, PlatformIO
 - [Spiegazione script sensori](scripts%20and%20configuration/pyexplanation.md) — come funziona `sensors.py`
@@ -219,15 +222,16 @@ In sintesi:
 
 | Elemento | Contenuto |
 |----------|-----------|
-| `plan.pdf` | Piano operativo (fonte di questa documentazione) |
-| `main.pdf` | Materiale / paper di riferimento |
+| `plan.pdf` | Piano operativo del progetto e fonte per obiettivi, hardware e attività |
+| `main.pdf` | Manoscritto scientifico di riferimento per forecaster, decider e valutazione energetica |
 | `scripts and configuration/piconfig.md` | Guida configurazione del Pi |
 | `scripts and configuration/espconfig.md` | Guida configurazione dell’ESP |
 | `scripts and configuration/pyexplanation.md` | Spiegazione di `sensors.py` |
-| `scripts and configuration/capture_rpi.sh` | Script che avvia la cattura |
+| `scripts and configuration/capture_rpi.sh` | Wrapper per ambiente Python, scatto e burst dei sensori |
 | `scripts and configuration/sensors.py` | Lettura una tantum dei sensori **sul Pi** |
 | `scripts and configuration/insect-capture.service` | Servizio systemd per l’app selettiva |
-| `backend/` | Client di cattura, metadati, lettori GPS/BME (BME di campo: via ESP) |
+| `scripts and configuration/capture_client.py` | Scatto con `rpicam-still` e metadati GPS |
+| `backend/` | Helper metadati e lettore GPS; `bme_reader.py` è solo per prove al banco |
 | `esp32/` | Firmware PlatformIO (oggi: risveglio; poi BME + politica) |
 | `schemi elettrici/` | Schemi KiCad, tra cui BME280 |
 
@@ -237,12 +241,12 @@ In sintesi:
 ESP (previsione + decisione) autorizza
         → impulso WAKE sui pad J2
         → il Pi si avvia
-        → systemd lancia capture_rpi.sh --oneshot
-        → foto JPG (+ misure disponibili)
+        → systemd lancia scripts and configuration/capture_rpi.sh --oneshot
+        → foto JPG + lettura dei sensori Pi abilitati
         → systemctl poweroff → di nuovo in halt
 ```
 
-(`--oneshot` = una sola cattura e poi il programma termina.)
+(`--oneshot` = una cattura, poi un burst dei sensori abilitati sul Pi; il servizio systemd esegue quindi `poweroff`. Il BME280 di campo non è ancora ricevuto dall’ESP.)
 
 ---
 

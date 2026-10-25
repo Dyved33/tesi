@@ -188,10 +188,10 @@ static/uploads/images/rpi_YYYYMMDD-HHMMSS.jpg
 Script:
 
 - [`capture_rpi.sh`](capture_rpi.sh) — attiva Python e lancia il client
-- `backend/capture_client` — scatto via `rpicam-still`
+- [`capture_client.py`](capture_client.py) — scatto via `rpicam-still`
 
 ```bash
-./capture_rpi.sh --oneshot
+bash "scripts and configuration/capture_rpi.sh" --oneshot
 sudo systemctl poweroff
 ```
 
@@ -206,7 +206,7 @@ sudo systemctl enable insect-capture.service
 
 Per test lunghi: disabilita il servizio o togli il `poweroff`.
 
-Variabili: copia [`.env.systemd.example`](.env.systemd.example) in `.env.systemd` nella root del progetto sul Pi.
+Variabili: copia [`.env.systemd.example`](.env.systemd.example) in `.env.systemd` nella root del progetto sul Pi. Imposta `PYENV_ROOT` al percorso del virtualenv (per esempio `/home/rpi5-03/venv`); il wrapper ne attiva `bin/activate`. In alternativa configura pyenv e `PYENV_VERSION`.
 
 ```bash
 CAPTURE_MODE=selective   # oneshot + halt

@@ -7,7 +7,8 @@ consume forwarded samples (with measurement timestamp). This module still
 supports direct I2C on the Pi for bench tests and for capture_client.py until
 the ESP→Pi protocol is in place.
 
-Provides get_bme280_reading() compatible with capture_client.py.
+Provides a direct-I2C helper for bench tests. The field capture client does
+not call this module because the field BME280 is connected to the ESP32.
 """
 
 import logging

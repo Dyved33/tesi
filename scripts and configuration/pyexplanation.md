@@ -101,7 +101,7 @@ Exit `0` se tutti i sensori abilitati ok, `1` se qualcuno fallisce (la riga vien
 
 ## Integrazione con la cattura
 
-`capture_rpi.sh --oneshot` lancia `python -m backend.capture_client`, che può allegare metadati ambientali alla foto. Target: stessi valori BME provenienti dall’ESP e letture dei sensori Pi, collegabili per timestamp al DB del dataset.
+`capture_rpi.sh --oneshot` lancia `capture_client.py` per lo scatto e poi `sensors.py` per il burst. Il client aggiunge l’eventuale fix GPS ai metadati della foto; non interroga il BME via I2C sul Pi. I valori BME saranno associati quando sarà disponibile il protocollo ESP→Pi e dovranno conservare timestamp di misura e ricezione separati.
 
 ---
 

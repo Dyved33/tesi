@@ -7,7 +7,6 @@ import time
 from datetime import datetime
 from shutil import which
 
-from backend.bme_reader import get_bme280_reading
 from backend.gps_reader import get_gps_fix
 from backend.photo_metadata import (
     DEFAULT_METADATA,
@@ -295,22 +294,8 @@ def capture_photo(
         else:
             logging.info("No GPS fix available for %s", os.path.basename(file_path))
 
-        bme = get_bme280_reading()
-        if bme:
-            metadata["temperature"] = bme.get("temperature")
-            metadata["humidity"] = bme.get("humidity")
-            metadata["pressure"] = bme.get("pressure")
-            metadata_updated = True
-            logging.info(
-                "BME280 reading saved for %s: T=%.2fC H=%.2f%% P=%.2fhPa (%s)",
-                os.path.basename(file_path),
-                float(metadata["temperature"]),
-                float(metadata["humidity"]),
-                float(metadata["pressure"]),
-                bme.get("bme_address", "unknown-addr"),
-            )
-        else:
-            logging.info("No BME280 reading available for %s", os.path.basename(file_path))
+        # The field BME280 is hosted by the ESP32. Until the ESP→Pi data
+        # protocol is implemented, this client must not read it over Pi I2C.
 
         if metadata_updated:
             save_metadata_for_image_path(file_path, metadata)

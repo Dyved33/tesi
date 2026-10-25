@@ -53,18 +53,18 @@ done
 
 if [[ $# -gt 0 ]]; then
   # Run capture client with all args
-  python -m backend.capture_client "$@"
+  python "${SCRIPT_DIR}/capture_client.py" "$@"
   CAPTURE_EXIT=$?
 else
   # Continuous mode
-  python -m backend.capture_client --interval "$CAPTURE_INTERVAL"
+  python "${SCRIPT_DIR}/capture_client.py" --interval "$CAPTURE_INTERVAL"
   CAPTURE_EXIT=$?
 fi
 
 # In oneshot mode (energy-aware cycle), also run sensors.py for CSV logging
 if [[ "$ONESHOT" == "true" ]]; then
   echo "[capture_rpi] Running sensors.py for environmental CSV logging..."
-  python sensors.py
+  python "${SCRIPT_DIR}/sensors.py"
   SENSORS_EXIT=$?
   # Exit with error if either failed
   if [[ $CAPTURE_EXIT -ne 0 || $SENSORS_EXIT -ne 0 ]]; then

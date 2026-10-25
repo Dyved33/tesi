@@ -14,7 +14,7 @@ WorkingDirectory=/home/rpi5-03/tesi
 Environment=PROJECT_DIR=/home/rpi5-03/tesi
 Environment=CAPTURE_MODE=selective
 EnvironmentFile=-/home/rpi5-03/tesi/.env.systemd
-ExecStart=/home/rpi5-03/tesi/capture_rpi.sh --oneshot
+ExecStart=/bin/bash /home/rpi5-03/tesi/scripts\x20and\x20configuration/capture_rpi.sh --oneshot
 ExecStartPost=/bin/systemctl poweroff
 RemainAfterExit=no
 
