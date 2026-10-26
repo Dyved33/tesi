@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""
-BME280 reading helper for the backend package.
+"""Read a BME280 directly over I2C for bench checks only.
 
 Per plan.pdf the field BME280 is attached only to the ESP32; the Pi should
 consume forwarded samples (with measurement timestamp). This module still
 supports direct I2C on the Pi for bench tests and for capture_client.py until
 the ESP→Pi protocol is in place.
 
-Provides a direct-I2C helper for bench tests. The field capture client does
-not call this module because the field BME280 is connected to the ESP32.
+The field sensor belongs on the ESP32; its measurements should reach the Pi
+through a future ESP-to-Pi protocol. The capture client does not call this
+module. ``library="smbus"`` only checks the chip ID and deliberately returns
+empty measurements because compensation has not been implemented.
 """
 
 import logging
@@ -40,8 +41,7 @@ def get_bme280_reading(
     address: int = 0x77,
     library: str = "auto"
 ) -> Optional[Dict[str, Any]]:
-    """
-    Read BME280 sensor data.
+    """Choose an installed backend and attempt one reading.
 
     Args:
         bus: I2C bus number (default 1 on Raspberry Pi)
@@ -50,7 +50,8 @@ def get_bme280_reading(
 
     Returns:
         Dict with keys: temperature (C), humidity (%), pressure (hPa), bme_address
-        Returns None if reading fails.
+        A measurement mapping, an all-``None`` dummy mapping, or ``None`` if
+        an actual hardware read fails. ``auto`` prefers Adafruit, then SMBus.
     """
     if library == "auto":
         if ADAFRUIT_AVAILABLE:
@@ -69,7 +70,11 @@ def get_bme280_reading(
 
 
 def _read_bme280_adafruit(bus: int, address: int) -> Optional[Dict[str, Any]]:
-    """Read BME280 via Adafruit CircuitPython library."""
+    """Read compensated values using Adafruit's CircuitPython driver.
+
+    ``bus`` is retained for API compatibility; the driver discovers the
+    platform's default I2C pins rather than selecting a bus number here.
+    """
     try:
         i2c = busio.I2C(board.SCL, board.SDA)
         bme = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=address)
@@ -85,7 +90,7 @@ def _read_bme280_adafruit(bus: int, address: int) -> Optional[Dict[str, Any]]:
 
 
 def _read_bme280_smbus(bus: int, address: int) -> Optional[Dict[str, Any]]:
-    """Read BME280 via raw SMBus (no compensation - returns raw values)."""
+    """Check the chip ID over SMBus; this is not a measurement implementation."""
     try:
         smbus = smbus2.SMBus(bus)
         # Read chip ID to verify presence
@@ -110,7 +115,7 @@ def _read_bme280_smbus(bus: int, address: int) -> Optional[Dict[str, Any]]:
 
 
 def _read_bme280_dummy() -> Optional[Dict[str, Any]]:
-    """Dummy reading for testing without hardware."""
+    """Return an empty-shaped record for tests without a sensor."""
     return {
         "temperature": None,
         "humidity": None,

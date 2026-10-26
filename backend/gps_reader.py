@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""
-GPS sensor reader for backend package.
+"""Read one GPS fix from a serial NMEA stream.
 
-Provides get_gps_fix() compatible with capture_client.py expectations.
-Wraps the NMEA parsing logic from sensors.py.
+The capture client uses :func:`get_gps_fix` to add coordinates to an image's
+JSON sidecar. This module accepts only ``$GPGGA`` sentences at present; a
+receiver that emits ``$GNGGA`` needs an explicit extension. If pyserial is not
+installed, the function returns a dummy record (all measurements are ``None``)
+so callers can still exercise the metadata path without GPS hardware.
 """
 
 import logging
@@ -25,8 +27,7 @@ def get_gps_fix(
     baudrate: int = 9600,
     timeout_s: int = 5
 ) -> Optional[Dict[str, Any]]:
-    """
-    Get GPS fix from NMEA serial stream.
+    """Wait up to ``timeout_s`` for a usable GPGGA sentence.
 
     Args:
         port: Serial port device path
@@ -34,14 +35,16 @@ def get_gps_fix(
         timeout_s: Maximum seconds to wait for a fix
 
     Returns:
-        Dict with keys: latitude, longitude, altitude, satellites, gps_port
-        Returns None if no fix within timeout.
+        A mapping with decimal-degree coordinates, altitude, satellite count,
+        and the serial port used. Returns ``None`` on timeout or read failure.
+        When pyserial is missing, returns the dummy mapping instead.
     """
     if not SERIAL_AVAILABLE:
         logger.error("pyserial not installed")
         return _get_gps_dummy()
 
     try:
+        # Short reads let us check the overall deadline regularly.
         ser = serial.Serial(port, baudrate=baudrate, timeout=1)
         deadline = time.time() + timeout_s
 
@@ -62,7 +65,11 @@ def get_gps_fix(
 
 
 def _parse_gpgga(line: str) -> Optional[Dict[str, Any]]:
-    """Parse $GPGGA NMEA sentence."""
+    """Extract position, altitude and satellite count from a GPGGA sentence.
+
+    GGA fix quality is not checked here; empty or invalid coordinates are
+    rejected, but downstream code should treat the result as a basic fix.
+    """
     try:
         parts = line.split(",")
         # $GPGGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx
@@ -89,7 +96,7 @@ def _parse_gpgga(line: str) -> Optional[Dict[str, Any]]:
 
 
 def _parse_nmea_coord(value: str, direction: str) -> Optional[float]:
-    """Convert NMEA DDMM.MMMM to decimal degrees."""
+    """Convert NMEA degrees-and-minutes (DDMM.MMMM) to signed decimal degrees."""
     if not value:
         return None
     try:
@@ -105,7 +112,7 @@ def _parse_nmea_coord(value: str, direction: str) -> Optional[float]:
 
 
 def _get_gps_dummy() -> Optional[Dict[str, Any]]:
-    """Dummy GPS reading for testing."""
+    """Return an explicitly empty GPS record for hardware-free use."""
     return {
         "latitude": None,
         "longitude": None,

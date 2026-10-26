@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""
-Photo metadata handling for backend package.
+"""Read and write image metadata in a neighboring JSON sidecar file.
 
 Provides DEFAULT_METADATA, load_metadata_for_image_path, save_metadata_for_image_path
 compatible with capture_client.py expectations.
 
 Stores metadata as JSON sidecar files (same name as image, .json extension).
-This is simpler and more robust than EXIF manipulation.
+The sidecar has the same basename as its image (``photo.jpg`` → ``photo.json``)
+and leaves image EXIF untouched. Missing measurements are represented by
+``None``. The capture client currently assembles some metadata itself, so
+``create_metadata_for_capture`` is a helper rather than its required path.
 """
 
 import json
@@ -16,7 +18,8 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Default metadata structure
+# Stable sidecar shape: readers can rely on these keys even before sensors
+# are connected. Optional readings populate the corresponding fields below.
 DEFAULT_METADATA = {
     "latitude": None,
     "longitude": None,
@@ -31,7 +34,7 @@ DEFAULT_METADATA = {
 
 
 def _get_metadata_path(image_path: str) -> str:
-    """Get the sidecar JSON path for an image."""
+    """Map an image path to its same-basename JSON sidecar path."""
     base, _ = os.path.splitext(image_path)
     return base + ".json"
 
@@ -86,17 +89,17 @@ def create_metadata_for_capture(
     bme_reading: Optional[Dict[str, Any]] = None,
     camera_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    Create a complete metadata dict for a new capture.
+    """Build the standard metadata record from available sensor readings.
 
     Args:
-        image_path: Path where image will be saved
+        image_path: Reserved for caller context; this helper does not write files
         gps_fix: Dict from get_gps_fix()
         bme_reading: Dict from get_bme280_reading()
         camera_settings: Dict of camera parameters used
 
     Returns:
-        Complete metadata dict
+        A fresh mapping; absent GPS/BME values remain ``None``. The timestamp
+        records when this helper ran, in UTC, not the sensor measurement time.
     """
     from datetime import datetime, timezone
 

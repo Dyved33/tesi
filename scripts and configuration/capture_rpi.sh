@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Entry point used manually or by systemd. It enters the project directory,
+# loads host-specific environment settings, activates Python, then runs the
+# photo client. In oneshot mode it also records one sensor CSV row; the
+# systemd unit (not this wrapper) requests poweroff after successful exit.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,17 +56,18 @@ for arg in "$@"; do
 done
 
 if [[ $# -gt 0 ]]; then
-  # Run capture client with all args
+  # Explicit CLI arguments select oneshot or customized continuous capture.
   python "${SCRIPT_DIR}/capture_client.py" "$@"
   CAPTURE_EXIT=$?
 else
-  # Continuous mode
+  # No CLI arguments means continuous mode with the configured interval.
   python "${SCRIPT_DIR}/capture_client.py" --interval "$CAPTURE_INTERVAL"
   CAPTURE_EXIT=$?
 fi
 
 # In oneshot mode (energy-aware cycle), also run sensors.py for CSV logging
 if [[ "$ONESHOT" == "true" ]]; then
+  # With `set -e`, an unsuccessful camera client exits before sensor logging.
   echo "[capture_rpi] Running sensors.py for environmental CSV logging..."
   python "${SCRIPT_DIR}/sensors.py"
   SENSORS_EXIT=$?

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""
-sensors.py — One-shot environmental sensor reader for Raspberry Pi 5 thesis.
+"""Read enabled Raspberry Pi sensors once and append one CSV record.
 
-Reads sensors hosted on the Pi (GPS, water, soil moisture, methane) in a single
-burst, appends one row to data/sensors.csv, and exits. Intended for the selective
-app while the Pi is awake after ESP wake, or on a timer in continuous mode.
+Each enabled device is read in sequence, so this is a burst, not a synchronized
+sample. It appends a row to ``data/sensors.csv`` and exits. The row timestamp is
+the time the script builds the record; each sensor may have been read earlier.
 
 Per plan.pdf the BME280 is wired ONLY to the ESP32 (external 3D case). CSV columns
 for BME exist for data forwarded from the ESP; local I2C BME is bench-only.
@@ -19,7 +18,9 @@ import time
 from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
-# CONFIGURATION — edit these to match your actual wiring / sensor models
+# CONFIGURATION — edit these to match your actual wiring / sensor models.
+# ``enabled`` controls invocation; ``library`` selects an implementation or
+# fallback. These example pins are not verified field wiring or calibration.
 # ---------------------------------------------------------------------------
 SENSORS = {
     # BME280: in the field this sensor lives on the ESP only (plan.pdf).
@@ -96,10 +97,12 @@ CSV_HEADER = [
 # Utility helpers
 # ---------------------------------------------------------------------------
 def now_iso() -> str:
+    """Return the CSV row timestamp in UTC ISO-8601 format."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def ensure_csv() -> None:
+    """Create the output directory and header only when the CSV is absent."""
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
     if not os.path.exists(CSV_PATH):
         with open(CSV_PATH, "w", newline="") as f:
@@ -108,6 +111,7 @@ def ensure_csv() -> None:
 
 
 def append_row(row: dict) -> None:
+    """Append declared columns, leaving values unavailable in this run blank."""
     ensure_csv()
     with open(CSV_PATH, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_HEADER)
@@ -119,7 +123,7 @@ def append_row(row: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def read_bme280() -> dict:
-    """BME280 via Adafruit CircuitPython library (I2C)."""
+    """Read compensated BME values using Adafruit (bench use on the Pi only)."""
     import board
     import busio
     import adafruit_bme280
@@ -139,6 +143,7 @@ def read_bme280() -> dict:
 # ============================================================
 
 def read_bme280_smbus() -> dict:
+    """Placeholder SMBus path: verify the chip responds, but return no values."""
     import smbus2
 
     bus = smbus2.SMBus(SENSORS["bme280"]["bus"])
@@ -165,7 +170,10 @@ def read_bme280_dummy() -> dict:
 
 
 def read_gps() -> dict:
-    """GPS NMEA over serial. Waits for a $GPGGA fix up to timeout_s."""
+    """Read the first coordinate-bearing GPGGA sentence before timeout.
+
+    This parser does not accept GNGGA and does not check GGA fix quality.
+    """
     import serial
 
     port = SENSORS["gps"]["port"]
@@ -197,7 +205,7 @@ def read_gps() -> dict:
 
 
 def parse_nmea_coord(value: str, direction: str):
-    """Convert NMEA DDMM.MMMM to decimal degrees."""
+    """Convert NMEA degrees/minutes to signed decimal degrees."""
     if not value:
         return None
     try:
@@ -221,7 +229,7 @@ def read_gps_dummy() -> dict:
 
 
 def read_water() -> dict:
-    """Digital water presence via gpiozero (active-low switch to GND)."""
+    """Read active-low digital input; a low level is interpreted as wet."""
     from gpiozero import DigitalInputDevice
 
     pin = SENSORS["water"]["pin"]
@@ -257,7 +265,7 @@ def read_water_dummy() -> dict:
 
 
 def read_adc(channel: int, chip: int = 0, vref: float = 3.3) -> float:
-    """Read one MCP3008 channel via Adafruit MCP3xxx library."""
+    """Read MCP3008 channel voltage; ``vref`` is unused by this backend."""
     import board
     import busio
     import adafruit_mcp3xxx.mcp3008 as MCP
@@ -276,6 +284,7 @@ def read_adc(channel: int, chip: int = 0, vref: float = 3.3) -> float:
 # ============================================================
 
 def read_adc_spidev(channel: int, chip: int = 0, vref: float = 3.3) -> float:
+    """Read one raw MCP3008 channel over SPI and convert counts to voltage."""
     import spidev
 
     spi = spidev.SpiDev()
@@ -300,6 +309,7 @@ def read_adc_dummy(channel: int, **kwargs) -> float:
 
 
 def read_soil_moisture() -> dict:
+    """Return soil voltage and an uncalibrated linear percentage estimate."""
     cfg = SENSORS["soil_moisture"]
     if cfg["interface"] == "adc":
         voltage = read_adc(cfg["adc_channel"], cfg["adc_chip"], cfg["adc_vref"])
@@ -342,6 +352,7 @@ def read_soil_moisture_dummy() -> dict:
 
 
 def read_methane() -> dict:
+    """Return analog voltage (or digital alarm); calibrated ppm is not implemented."""
     cfg = SENSORS["methane"]
     if cfg["interface"] == "adc":
         voltage = read_adc(cfg["adc_channel"], cfg["adc_chip"], cfg["adc_vref"])
@@ -385,7 +396,10 @@ def read_methane_dummy() -> dict:
 # ---------------------------------------------------------------------------
 
 def read_sensor_with_fallback(name: str, primary, alternatives: dict) -> tuple:
-    """Try primary, then listed alternatives; return (dict, ok_flag)."""
+    """Run the configured backend, falling back to dummy only after an exception.
+
+    A dummy result counts as an operational success, not as a real measurement.
+    """
     lib = SENSORS[name].get("library", "primary")
     try:
         if lib in alternatives:
@@ -407,6 +421,7 @@ def read_sensor_with_fallback(name: str, primary, alternatives: dict) -> tuple:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    """Read enabled devices, append their fields, and report failed readers."""
     results = {}
     ok_list = []
     fail_list = []
@@ -473,7 +488,8 @@ def main() -> int:
         results["methane"] = data
         (ok_list if ok else fail_list).append("methane")
 
-    # Build CSV row
+    # Build one row using the stable CSV schema. Sensors absent from this run
+    # remain blank; the row timestamp is not an individual sample time.
     row = {"timestamp_iso": now_iso(), "sensors_ok": ",".join(ok_list), "sensors_failed": ",".join(fail_list)}
 
     b = results.get("bme280", {})

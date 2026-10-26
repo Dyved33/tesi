@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Capture photos with the Raspberry Pi camera CLI and attach GPS sidecars.
+
+``--oneshot`` captures one image and exits; without it, the client repeats at
+the requested interval. This script does not read the field BME280: that
+sensor is wired to the ESP32 and no ESP-to-Pi data protocol exists yet.
+"""
 import argparse
 import logging
 import os
@@ -18,6 +24,7 @@ IMAGE_DIR = "static/uploads/images"
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define CLI options for capture timing, image output and camera controls."""
     parser = argparse.ArgumentParser(
         description="Camera capture client for Raspberry Pi (camera only)."
     )
@@ -134,9 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_af_settings(args: argparse.Namespace) -> dict[str, str | bool | None]:
-    """
-    Resolve autofocus settings from profile, then apply explicit overrides.
-    """
+    """Start from the selected preset, then let explicit AF flags take priority."""
     if args.profile == "macro":
         af = {
             "mode": "continuous",
@@ -168,8 +173,10 @@ def resolve_af_settings(args: argparse.Namespace) -> dict[str, str | bool | None
 
 
 def build_center_roi(zoom_factor: float) -> str | None:
-    """
-    Build centered ROI for rpicam/libcamera in normalized coords x,y,w,h.
+    """Return a centered normalized crop for digital zoom, or ``None`` at 1x.
+
+    Coordinates use the camera CLI's x,y,width,height fractions of the full
+    image. This crops the center; it does not provide optical zoom.
     """
     if zoom_factor <= 1.0:
         return None
@@ -194,6 +201,11 @@ def capture_photo(
     sharpness: float,
     contrast: float,
 ) -> str | None:
+    """Run one still capture and save its JPG plus GPS data when available.
+
+    Returns the image path on success, or ``None`` when no camera CLI exists
+    or the camera process fails. Camera output is written before GPS is read.
+    """
     os.makedirs(IMAGE_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     file_path = os.path.join(IMAGE_DIR, f"rpi_{timestamp}.jpg")
@@ -273,6 +285,7 @@ def capture_photo(
         contrast,
     )
     try:
+        # A non-zero camera exit becomes CalledProcessError and is reported below.
         subprocess.run(cmd, check=True)
         metadata = load_metadata_for_image_path(file_path)
         if not metadata:
@@ -308,6 +321,7 @@ def capture_photo(
 
 
 def main() -> int:
+    """Parse options, then run one capture or the continuous capture loop."""
     args = build_parser().parse_args()
     logging.basicConfig(
         format="%(asctime)s [%(levelname)s] %(message)s",

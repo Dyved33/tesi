@@ -65,18 +65,22 @@ constexpr uint32_t EVENT_COOLDOWN_MS = 30000;
 
 static uint32_t lastEventMs = 0;
 
+// ALIVE is a board-level status hint: HIGH means the observed 3.3 V rail is up.
+// It cannot distinguish normal operation from an in-progress shutdown.
 bool piAlive() {
   return digitalRead(PIN_ALIVE) == HIGH;
 }
 
 void pulseJ2() {
-  // Pressione breve: mai ~1 s (hard off sul Pi).
+  // The PC817 transistor briefly shorts the J2 button pads. Keep this pulse
+  // short: holding the button for about a second can request a hard-off.
   digitalWrite(PIN_WAKE, HIGH);
   delay(WAKE_PULSE_MS);
   digitalWrite(PIN_WAKE, LOW);
 }
 
 bool waitForAlive(uint32_t timeoutMs) {
+  // Poll instead of blocking on one long delay so the timeout stays bounded.
   const uint32_t t0 = millis();
   while (millis() - t0 < timeoutMs) {
     if (piAlive()) {
@@ -110,6 +114,8 @@ bool ensurePiOn() {
 }
 
 bool initCamera() {
+  // The ESP32-CAM camera is currently used only as an event-detection input;
+  // the Raspberry Pi camera remains responsible for saved field photographs.
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -175,6 +181,9 @@ bool eventDetected() {
 
 void onEvent() {
   const uint32_t now = millis();
+  // Unsigned subtraction remains valid across millis() counter rollover.
+  // Since lastEventMs starts at zero, events during the first cooldown window
+  // after boot are ignored as well.
   if (now - lastEventMs < EVENT_COOLDOWN_MS) {
     Serial.println("Event ignored (cooldown)");
     return;
