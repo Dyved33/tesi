@@ -23,17 +23,17 @@ Il BME280 di campo è previsto sul solo ESP32, ma non è ancora implementato il 
 Firmware Arduino per una scheda AI-Thinker ESP32-CAM. Definisce il pinout della camera integrata, `PIN_WAKE` (GPIO14) e `PIN_ALIVE` (GPIO13).
 
 - `piAlive()` legge ALIVE: HIGH indica che il rail osservato è presente; LOW è interpretato come Pi in halt.
-- `pulseJ2()` porta WAKE alto per 200 ms e poi lo riporta basso. Il circuito PC817 è previsto per chiudere momentaneamente i pad J2.
+- `pulseJ2()` porta WAKE alto per 200 ms e poi lo riporta basso. L’optoisolatore non è previsto; il circuito di interfaccia tra GPIO14 e i pad J2 è ancora da definire e verificare elettricamente.
 - `waitForAlive()` controlla ALIVE ogni 250 ms fino al timeout.
 - `ensurePiOn()` non invia un secondo impulso se ALIVE è già alto; altrimenti invia WAKE e attende la risposta.
 - `initCamera()` configura il sensore della ESP32-CAM e sceglie buffer PSRAM/DRAM secondo la memoria rilevata.
 - `eventDetected()` acquisisce e rilascia un frame, ma restituisce sempre `false`: l’inferenza è un punto di estensione, non una funzione implementata.
 - `onEvent()` applica un cooldown di 30 secondi e prova ad assicurare che il Pi sia acceso.
-- `setup()` inizializza seriale, pin e camera; `loop()` controlla l’evento e accetta `w` dalla seriale per una prova manuale.
+- `setup()` inizializza USB-seriale, pin e camera; `loop()` controlla l’evento e accetta `w` dal monitor seriale USB del computer (115200 baud) per una prova manuale.
 
-Quindi, nella versione attuale non c’è un trigger automatico: il Pi può essere svegliato manualmente da seriale, mentre il percorso automatico attende ancora la logica di evento. La camera sull’ESP è una dipendenza temporanea del prototipo; il piano assegna le fotografie di campo alle fotocamere del Raspberry.
+Nella versione attuale `eventDetected()` restituisce sempre false: il Pi può essere svegliato manualmente dal monitor USB-seriale, mentre il rilevamento automatico è ancora da implementare. La possibile AI-Thinker rileverà l’evento; le fotografie di campo restano affidate alle fotocamere del Raspberry.
 
-Nota sul cooldown: `lastEventMs` parte da zero, quindi una richiesta nei primi 30 secondi dall’avvio viene scartata come cooldown. Tenerne conto nei test manuali.
+Il primo evento è accettato subito; i successivi sono separati da un cooldown di 30 secondi.
 
 ### `platformio.ini`
 
@@ -51,19 +51,29 @@ Esempio di intestazione per credenziali Wi-Fi, da copiare in `secrets.h` solo se
 
 Wrapper shell che imposta la directory del progetto, carica `.env.systemd` se presente e attiva un ambiente Python tramite pyenv o `PYENV_ROOT/bin/activate`. Con argomenti inoltra il comando a `capture_client.py`; senza argomenti avvia la cattura ripetuta usando `CAPTURE_INTERVAL`. Se riceve `--oneshot`, dopo lo scatto lancia anche `sensors.py`.
 
-Il wrapper non esegue da solo `poweroff`: nel ciclo selettivo lo fa `insect-capture.service` dopo il completamento con successo del comando. Un errore di cattura o sensori deve essere gestito prima che il servizio completi il ciclo.
+Il wrapper non esegue da solo `poweroff`: nel ciclo selettivo lo fa `insect-capture.service` dopo il completamento con successo del comando. Lo script usa `set -e`: se la cattura termina con errore, la shell si interrompe prima di salvare la riga sensori. In modalità `--oneshot`, se la cattura riesce, esegue `sensors.py` e segnala l’errore se fallisce una delle fasi. Senza argomenti avvia il client in modalità continua con `CAPTURE_INTERVAL` (default 30 secondi); con argomenti inoltra le opzioni al client. `.env.systemd` può fornire impostazioni specifiche dell’installazione e dell’ambiente Python.
 
 ### `capture_client.py`
 
-Interfaccia a riga di comando per acquisire immagini con `rpicam-still` (o `libcamera-still` come fallback). `build_parser()` definisce modalità oneshot/continua e parametri di ripresa; `resolve_af_settings()` combina il profilo standard/macro con le opzioni AF; `build_center_roi()` calcola una regione centrale per lo zoom digitale; `capture_photo()` esegue la CLI, salva il JPG sotto `static/uploads/images/` e aggiorna un sidecar JSON con il fix GPS disponibile; `main()` gestisce ciclo e intervallo.
-
-Non legge direttamente il BME280: i dati di campo dovranno arrivare dall’ESP quando esisterà il protocollo. Le opzioni di camera sono singole impostazioni di acquisizione; la selezione e l’uso della seconda fotocamera non sono ancora orchestrati da questo client.
+Interfaccia a riga di comando per acquisire immagini con `rpicam-still` (o `libcamera-still` come fallback). `build_parser()` definisce modalità oneshot/continua e parametri di ripresa: dimensioni, qualità, zoom, profilo standard/macro, autofocus, shutter, denoise e controlli immagine. `resolve_af_settings()` combina il profilo con gli override AF; `build_center_roi()` calcola una regione centrale per lo zoom digitale; `capture_photo()` esegue il comando, salva il JPG sotto `static/uploads/images/` e aggiorna un sidecar JSON con timestamp, impostazioni e fix GPS disponibile. `main()` gestisce percorsi, ciclo e intervallo. Il client non legge il BME280: il BME di campo è sull’ESP e il protocollo di inoltro non è ancora disponibile.
 
 ### `sensors.py`
 
-Lettore oneshot che raccoglie i sensori collegati al Pi e aggiunge una riga a `scripts and configuration/data/sensors.csv`. `SENSORS` contiene flag, pin, porte, canali ADC e backend scelti; `CSV_HEADER` definisce lo schema; gli helper `read_*` accedono a GPS NMEA, ingresso digitale acqua, MCP3008/sensori analogici o implementazioni dummy; `read_sensor_with_fallback()` registra errori e tenta l’alternativa configurata; `main()` legge i dispositivi abilitati e scrive il burst.
+Lettore **oneshot**: legge una volta i sensori collegati al Pi, appende un record a `scripts and configuration/data/sensors.csv` e termina. Non è un processo residente. In modalità selettiva viene eseguito dopo lo scatto; in modalità continuativa può essere richiamato a intervalli regolari.
 
-Il BME locale è disattivato per impostazione predefinita: le funzioni Adafruit/SMBus rimangono utili solo per prove al banco. La routine SMBus nel file è un segnaposto e non calcola misure compensate, quindi non va usata per dati scientifici. Anche sensori analogici, calibrazione in percentuale/ppm, pin e soglie sono configurazioni da adattare ai modelli e al cablaggio effettivi. Le righe CSV attuali sono campioni/schema iniziale, non un database completo.
+`SENSORS` configura abilitazione, pin, porte UART, canali ADC e backend. `CSV_HEADER` definisce lo schema. Gli helper `read_*` accedono a GPS NMEA, ingresso digitale acqua e MCP3008/sensori analogici. I backend alternativi includono librerie Adafruit, `spidev`, `RPi.GPIO`/`gpiozero` e dummy. `read_sensor_with_fallback()` registra gli errori e tenta il fallback configurato; `main()` legge i dispositivi abilitati in sequenza, costruisce timestamp ed esiti, aggiunge la riga e restituisce `0` se tutte le letture abilitate riescono o `1` in caso di errori. Scrive comunque i valori disponibili. È un burst sequenziale, non una misura simultanea.
+
+| Sensore | Implementazioni | Limiti |
+|---|---|---|
+| BME280 | Adafruit I²C, SMBus, dummy | I²C locale solo al banco; in campo è collegato all’ESP |
+| GPS | `pyserial`, NMEA `$GPGGA`, dummy | Non riconosce ancora `$GNGGA`; attende un fix fino al timeout |
+| Acqua | `gpiozero`, `RPi.GPIO`, dummy | Polarità e significato del livello dipendono dal cablaggio |
+| Suolo | MCP3008 Adafruit, `spidev` raw, ingresso digitale, dummy | Il valore analogico richiede calibrazione |
+| Metano | MCP3008 Adafruit, `spidev` raw, ingresso digitale DO, dummy | Tensione ≠ ppm senza calibrazione del sensore |
+
+Il BME locale è disattivato per impostazione predefinita: la routine SMBus è un segnaposto che verifica il chip ID ma non calcola misure compensate. I dummy sono solo dati fittizi/vuoti, non misure. La riga CSV contiene timestamp ISO UTC, campi sensore e liste di esiti. Il timestamp del record non sostituisce il timestamp di misura; per i dati BME inoltrati dall’ESP dovranno essere conservati sia il tempo di misura sia quello di ricezione. La calibrazione di suolo e metano, i pin, la polarità e le soglie vanno verificati sul cablaggio reale. Il CSV presente è uno schema/campione iniziale, non un database definitivo.
+
+Per eseguirlo manualmente sul Pi: attivare il virtualenv e lanciare `python3 "scripts and configuration/sensors.py"`; controllare poi il record aggiunto al CSV. Prima del campo allineare `SENSORS` all’hardware e lasciare disabilitata la lettura I²C locale del BME.
 
 ### `data/sensors.csv`
 
@@ -77,9 +87,9 @@ Unità systemd `oneshot`: avvia il wrapper quando il Pi completa il boot e, se i
 
 Modello delle variabili lette dal servizio/wrapper: modalità, intervallo foto e sensori, e selezione dell’ambiente Python. Va copiato come `.env.systemd` nella root del progetto sul Pi e personalizzato; non contiene segreti.
 
-### `awakening.md`
+### Guida consolidata di configurazione
 
-Nota storica sul risveglio via GPIO3 per Raspberry Pi 4. Il documento è marcato come legacy e non descrive il circuito scelto per il Pi 5, che usa i pad J2 tramite optoisolatore e una linea ALIVE.
+`config$awakening.md` contiene la sequenza di configurazione Pi/ESP, le prove fisiche ordinate e l’archivio delle guide precedenti. La sezione storica Pi 4 descrive GPIO3/UART e non va applicata al Pi 5.
 
 ## File di esclusione Git
 
@@ -89,9 +99,9 @@ La cartella `backend/__pycache__/` contiene bytecode Python generato automaticam
 
 ## Moduli Python di supporto (`backend/`)
 
-- `gps_reader.py`: apre la porta seriale configurata, cerca frasi `$GPGGA`, estrae latitudine/longitudine, quota e satelliti, e converte le coordinate gradi-minuti in gradi decimali. Il parser attuale riconosce il prefisso `GPGGA`; ricevitori che emettono `GNGGA` richiedono un’estensione. Il dummy è un fallback senza dati GPS reali.
-- `bme_reader.py`: helper per lettura BME280 via I2C Adafruit, mantenuto per prove al banco. L’opzione SMBus verifica l’ID ma restituisce campi vuoti senza compensazione; il dummy non è una misura. Il client di cattura non usa questo modulo per il BME di campo.
-- `photo_metadata.py`: crea, legge e scrive sidecar JSON accanto alle immagini. Definisce la struttura base per posizione, misure, timestamp e impostazioni; non modifica gli EXIF dell’immagine. `create_metadata_for_capture()` è un helper disponibile, mentre il client corrente compone parte dei metadati direttamente.
+- `gps_reader.py`: apre la porta seriale, attende una frase `$GPGGA`, converte coordinate gradi/minuti in decimali ed estrae quota e satelliti. Restituisce `None` su timeout/errore; se manca pyserial produce una struttura dummy. Non gestisce ancora `$GNGGA` e non controlla tutte le condizioni di qualità del fix.
+- `bme_reader.py`: helper I²C per prove al banco. `auto` preferisce Adafruit, poi SMBus; l’indirizzo previsto è `0x76`/`0x77`. Adafruit fornisce letture compensate; SMBus controlla solo il chip ID e restituisce temperature/umidità/pressione vuote. Il dummy non è una misura. Non è il lettore del BME di campo e `capture_client.py` non lo chiama.
+- `photo_metadata.py`: crea, carica e salva sidecar JSON accanto alle immagini (`foto.jpg` → `foto.json`) senza toccare gli EXIF. Il record base comprende GPS, misure, timestamp, impostazioni camera e letture sensori; valori mancanti restano `null`. `create_metadata_for_capture()` prepara una struttura, ma il client attuale compone direttamente parte dei metadati.
 - `__init__.py`: marca `backend` come package Python e documenta lo scopo dei moduli.
 
 ## Fonti tecniche e riferimenti

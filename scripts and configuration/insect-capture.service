@@ -1,6 +1,6 @@
 # Selective acquisition (energy study / TMC-style): one capture after wake, then halt.
 # Do NOT enable this unit for continuous dataset mode (no automatic poweroff there).
-# Docs: piconfig.md, plan.pdf
+# Docs: ../config$awakening.md, plan.pdf
 
 [Unit]
 Description=Selective oneshot capture after ESP wake, then halt

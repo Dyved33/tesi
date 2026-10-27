@@ -5,15 +5,16 @@
  * scarta ogni frame e restituisce sempre false. Il wake è quindi provabile dal
  * monitor seriale con 'w'. Non implementa ancora BME280, forecaster o decider.
  * Il target di progetto è un ESP sempre alimentato che legge il BME280 e applica
- * la politica di wake; la camera ESP è solo una dipendenza temporanea del prototipo.
+ * la politica di wake;
  *
- * Collegamento di prova (vedi scripts and configuration/espconfig.md):
- *   WAKE: GPIO14 → 330Ω → LED PC817 → GND ESP; transistor PC817 sui pad J2.
- *         HIGH per 200ms chiude brevemente J2.
+ * Collegamento di prova (vedi ../config$awakening.md):
+ *   WAKE: GPIO14 comanda il circuito che chiude brevemente i due pad J2.
+ *         Il progetto al momento non prevede un optoisolatore; il collegamento
+ *         diretto è da definire e verificare elettricamente prima del cablaggio.
  *   ALIVE: Pi GPIO17 → ESP GPIO13, pulldown 10kΩ lato ESP e massa comune.
- *          HIGH indica che il rail 3,3V osservato è presente; LOW che è assente.
- *          È un'indicazione elettrica, non distingue il normale funzionamento
- *          dalla fase di shutdown. ensurePiOn() non invia wake se ALIVE è HIGH.
+ *          HIGH indica che GPIO17 è attivo; LOW che non lo è. Questo segnale
+ *          non distingue il normale funzionamento dalla fase di shutdown.
+ *          ensurePiOn() non invia wake se ALIVE è HIGH.
  *
  * Con POWER_OFF_ON_HALT=1 il rail 3,3V del Pi si spegne in halt; ESP e BME280
  * devono quindi essere alimentati separatamente (ad esempio dal 5V del Pi,
@@ -22,8 +23,7 @@
  *
  * La cattura del frame ESP serve solo al rilevamento provvisorio: nessuna immagine
  * viene inviata al Pi. Nel sistema previsto, le foto di campo sono acquisite
- * dalle fotocamere collegate al Raspberry. README.md e plan.pdf descrivono il
- * sistema complessivo; la guida ESP documenta cablaggio e stato del firmware.
+ * dalle fotocamere collegate al Raspberry. 
  */
 
 #include <Arduino.h>
@@ -31,7 +31,7 @@
 
 // Pinout fisico della camera integrata sulla ESP32-CAM AI-Thinker.
 // Ogni nome viene usato sotto per associare un segnale del sensore al GPIO
-// corrispondente. Non cambiare questi numeri senza verificare la scheda e il
+// corrispondente. Non vanno cambiati questi numeri senza verificare la scheda e il
 // cablaggio: valori errati possono impedire l'inizializzazione della camera.
 // PWDN = power-down; RESET = reset (qui non collegato, quindi -1).
 #define PWDN_GPIO_NUM     32
@@ -55,35 +55,33 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-// GPIO usati dal circuito esterno ESP32-Pi.
-// WAKE pilota il LED del PC817; il transistor del PC817 chiude i pad J2.
+// GPIO usati dal circuito esterno ESP32-Pi. WAKE comanda la chiusura breve J2;
+// il collegamento diretto senza optoisolatore va verificato prima del cablaggio.
 // ALIVE legge il livello proveniente dal GPIO17 del Pi, con pulldown esterno.
 constexpr int PIN_WAKE = 14;
 constexpr int PIN_ALIVE = 13;
 
 // Durata dell'impulso che simula una pressione breve sui pad J2.
 constexpr uint32_t WAKE_PULSE_MS = 200;
-// Tempo massimo per osservare ALIVE alto dopo aver inviato l'impulso.
+// Tempo massimo per osservare ALIVE HIGH dopo aver inviato l'impulso.
 constexpr uint32_t ALIVE_WAIT_MS = 15000;
 // Intervallo minimo fra due tentativi accettati di gestione evento.
 constexpr uint32_t EVENT_COOLDOWN_MS = 30000;
 
-// Istante (in millisecondi dall'avvio) dell'ultimo evento accettato.
-// Parte da zero: di conseguenza un evento prima che siano trascorsi 30 secondi
-// dall'avvio viene ignorato dal controllo in onEvent().
+// Timestamp dell'ultimo evento. Il primo evento viene accettato subito.
 static uint32_t lastEventMs = 0;
+static bool hasHandledEvent = false;
 
-// ALIVE è un'indicazione elettrica: HIGH significa che il rail 3,3 V osservato
-// è presente. Non distingue il funzionamento normale dallo shutdown in corso.
+// ALIVE legge il livello del GPIO17 configurato sul Pi; HIGH significa che il
+// GPIO è attivo. Non distingue il funzionamento normale dallo shutdown in corso.
 bool piAlive() {
   // digitalRead restituisce HIGH o LOW; qui non viene fatta alcuna attesa o filtro.
   return digitalRead(PIN_ALIVE) == HIGH;
 }
 
-// Simula una pressione breve del pulsante del Raspberry attraverso l'optoisolatore.
+// Attiva WAKE per 200 ms. Il circuito esterno deve chiudere i due contatti J2.
+// Non collegare GPIO14 direttamente a J2 senza aver verificato schema e livelli.
 void pulseJ2() {
-  // Il transistor del PC817 chiude brevemente i pad J2. L'impulso deve restare
-  // corto: tenere la chiusura per circa un secondo può provocare uno spegnimento forzato.
   digitalWrite(PIN_WAKE, HIGH);
   delay(WAKE_PULSE_MS);
   digitalWrite(PIN_WAKE, LOW);
@@ -102,22 +100,23 @@ bool waitForAlive(uint32_t timeoutMs) {
     // Interroga ALIVE ogni 250 ms invece di attendere tutto il timeout in un colpo.
     delay(250);
   }
-  // Scaduto il tempo senza aver letto ALIVE alto.
+  // Scaduto il tempo senza aver letto ALIVE HIGH.
   return false;
 }
 
 /**
- * Impulso WAKE solo se il Pi risulta spento (ALIVE basso).
- * Se ALIVE è già alto (acceso o in shutdown), non ritentare.
+ * Se ALIVE è LOW, invia l'impulso WAKE a J2, che simula il pulsante di
+ * accensione, poi attende ALIVE HIGH. ALIVE HIGH non distingue boot, uso e
+ * shutdown, quindi in quel caso evita un altro impulso.
  */
 bool ensurePiOn() {
   // true significa che ALIVE è HIGH, non che Linux abbia finito l'avvio.
   if (piAlive()) {
-    Serial.println("ALIVE high: Pi already on (or shutting down) — skip WAKE");
+    Serial.println("ALIVE HIGH: Pi already on (or shutting down) — skip WAKE");
     return true;
   }
 
-  Serial.println("ALIVE low: pulsing J2 WAKE");
+  Serial.println("ALIVE LOW: pulsing J2 WAKE");
   pulseJ2();
 
   // Dopo l'impulso il firmware attende il segnale elettrico, non la disponibilità
@@ -127,16 +126,17 @@ bool ensurePiOn() {
     return false;
   }
 
-  Serial.println("ALIVE high: Pi booting");
+  Serial.println("ALIVE HIGH: Pi booting");
   return true;
 }
 
 bool initCamera() {
-  // Per ora la camera ESP32-CAM è usata solo come ingresso per il rilevamento;
-  // le foto di campo restano affidate alle fotocamere collegate al Raspberry.
-  // Configura i pin AI-Thinker e un buffer JPEG per il trigger provvisorio:
-  // il firmware futuro basato sul BME280 non avrà bisogno di questa camera.
+  // La camera ESP32-CAM rileva un evento; le foto di campo restano affidate
+  // alle fotocamere sul Raspberry. Anche il BME280 sarà collegato all'ESP32.
+  // GPIO21 è già camera Y5, quindi non può essere SDA mentre la camera è attiva.
   camera_config_t config;
+  // camera_config_t e le funzioni esp_camera_* sono dichiarate da esp_camera.h,
+  // parte del componente esp32-camera incluso nel framework ESP32/PlatformIO.
   // Assegna al driver i GPIO definiti sopra, seguendo la nomenclatura del bus
   // parallelo della camera: d0 corrisponde a Y2, d7 a Y9.
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -170,8 +170,13 @@ bool initCamera() {
   config.fb_count = 1;
   // Se arrivano frame più rapidamente di quanto il firmware li usi, preferisce
   // il più recente invece di accumulare frame vecchi.
+  // CAMERA_GRAB_LATEST è un valore di camera_grab_mode_t in esp_camera.h:
+  // quando i buffer si riempiono, il driver privilegia il frame più recente.
   config.grab_mode = CAMERA_GRAB_LATEST;
 
+  // PSRAM (pseudo-static RAM) è memoria aggiuntiva esterna montata su alcune
+  // schede. psramFound() appartiene al core Arduino-ESP32 e la rileva; la
+  // AI-Thinker ESP32-CAM normalmente monta 4 MB.
   if (psramFound()) {
     // Se è disponibile PSRAM, si può usare una risoluzione più alta e mantenere
     // due buffer in memoria esterna, evitando di occupare la RAM interna.
@@ -186,6 +191,7 @@ bool initCamera() {
 
   // Avvia il driver con la configurazione. In caso di errore il chiamante
   // blocca il firmware perché il percorso evento attuale richiede la camera.
+  // esp_camera_init(), dichiarata in esp_camera.h, inizializza il driver camera.
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed: 0x%x\n", err);
@@ -195,13 +201,15 @@ bool initCamera() {
 }
 
 /**
- * Punto d'inserimento per la visione artificiale o per una soglia di evento.
- * Da sostituire con il metodo scelto per la tesi.
+ * Punto d'inserimento per la computer vision o per una soglia di evento.
  * Per ora legge e scarta un fotogramma, poi restituisce false: niente wake automatici.
  */
 bool eventDetected() {
   // Richiede un frame al driver. Il puntatore restituito è nullo se la cattura
   // non è riuscita; in quel caso non viene generato alcun evento.
+  // camera_fb_t è dichiarato in esp_camera.h. fb significa frame buffer:
+  // puntatore alla struttura con byte immagine, dimensione e metadati. Dopo
+  // l'uso va restituito al driver con esp_camera_fb_return().
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) {
     Serial.println("eventDetected: capture failed");
@@ -221,16 +229,16 @@ bool eventDetected() {
 void onEvent() {
   // millis() conta i millisecondi trascorsi dal boot; non è un orario assoluto.
   const uint32_t now = millis();
-  // La sottrazione tra interi senza segno resta valida quando millis() riparte
-  // da zero. Poiché lastEventMs parte da zero, gli eventi nei primi 30 secondi
-  // dall'avvio vengono ignorati; vale anche per i comandi manuali da seriale.
-  if (now - lastEventMs < EVENT_COOLDOWN_MS) {
+  // Il cooldown si applica solo dopo il primo evento; la sottrazione unsigned
+  // gestisce anche il riavvolgimento del contatore millis().
+  if (hasHandledEvent && now - lastEventMs < EVENT_COOLDOWN_MS) {
     Serial.println("Event ignored (cooldown)");
     return;
   }
   // Aggiorna il cooldown prima del tentativo di wake: anche un tentativo fallito
   // impedisce un nuovo tentativo fino alla fine dell'intervallo.
   lastEventMs = now;
+  hasHandledEvent = true;
 
   Serial.println("Event: ensuring Pi is on");
   if (!ensurePiOn()) {
@@ -239,16 +247,19 @@ void onEvent() {
 }
 
 void setup() {
-  // Inizializza la seriale usata per messaggi diagnostici e comando manuale.
+  // Inizializza la porta USB-seriale per log e comandi; il monitor seriale
+  // del computer deve usare la stessa velocità, 115200 bit/s.
   Serial.begin(115200);
   delay(500);
   Serial.println("ESP32-CAM wake node starting");
 
-  // WAKE è un'uscita e viene portata subito a LOW (opto inattivo) prima di usarla.
+  // pinMode(..., OUTPUT) configura GPIO14 come uscita digitale; LOW lo porta
+  // subito al livello di riposo prima di iniziare il ciclo principale.
   pinMode(PIN_WAKE, OUTPUT);
   digitalWrite(PIN_WAKE, LOW);
-  // ALIVE è un ingresso. Il pulldown interno mantiene LOW se il segnale esterno
-  // è scollegato; è inoltre previsto un pulldown esterno da 10 kΩ nel cablaggio.
+  // pinMode(..., INPUT_PULLDOWN) configura GPIO13 come ingresso digitale e
+  // abilita una debole resistenza interna verso massa, così scollegato tende
+  // a LOW. È previsto anche un pulldown esterno da 10 kΩ.
   pinMode(PIN_ALIVE, INPUT_PULLDOWN);
 
   // In questa versione la camera è obbligatoria: se non parte, resta in attesa
@@ -271,7 +282,8 @@ void loop() {
     onEvent();
   }
 
-  // Test manuale da seriale: digita 'w' + Enter per forzare un wake attempt.
+  // Prova manuale: aprire il monitor USB-seriale del computer a 115200 baud,
+  // digitare w e premere Invio per inviare il carattere alla ESP32.
   if (Serial.available()) {
     // Legge un solo byte per iterazione; il terminatore Enter viene ignorato.
     const char c = Serial.read();

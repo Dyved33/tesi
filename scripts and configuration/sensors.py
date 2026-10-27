@@ -8,7 +8,7 @@ the time the script builds the record; each sensor may have been read earlier.
 Per plan.pdf the BME280 is wired ONLY to the ESP32 (external 3D case). CSV columns
 for BME exist for data forwarded from the ESP; local I2C BME is bench-only.
 
-Edit the SENSORS dict to match actual wiring. See pyexplanation.md.
+Edit the SENSORS dict to match actual wiring. See CODE_GUIDE.md for the walkthrough.
 """
 
 import csv

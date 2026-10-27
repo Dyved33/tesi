@@ -12,9 +12,8 @@ Documentazione di avanzamento del progetto di tesi, allineata al piano operativo
 **Guide di configurazione:**
 
 - [Guida ai componenti software](CODE_GUIDE.md) — spiegazione di firmware, script, moduli Python e configurazioni
-- [Configurazione Raspberry Pi](scripts%20and%20configuration/piconfig.md) — spegnimento a basso consumo, linea ALIVE, sensori sul Pi, avvio automatico, cattura
-- [Configurazione ESP32](scripts%20and%20configuration/espconfig.md) — BME280, segnali di risveglio, previsione e decisione, PlatformIO
-- [Spiegazione script sensori](scripts%20and%20configuration/pyexplanation.md) — come funziona `sensors.py`
+- [Configurazione e risveglio](config%24awakening.md) — guida consolidata Pi/ESP e prove hardware
+- [Guida ai componenti software](CODE_GUIDE.md) — firmware, script, `sensors.py` e moduli Python `backend`
 
 ---
 
@@ -36,7 +35,7 @@ Documentazione di avanzamento del progetto di tesi, allineata al piano operativo
 | **POWER_OFF_ON_HALT = 1** | Impostazione EEPROM che, quando il Pi entra in halt, spegne il rail a 3,3 V. Il consumo tipico scende a circa 0,01 W; il Pi resta collegato alla presa e riaccendibile da pulsante o pad J2. |
 | **WAKE_ON_GPIO = 0** | Sul Pi 5 disabilita il risvevio via GPIO (usato sul Pi 4). L'accensione avviene tramite pulsante fisico o pad J2. |
 | **Pad J2** | Punti di contatto sulla scheda del Raspberry Pi che simulano la pressione del pulsante di accensione. Chiudendo brevemente i due pad il Pi si avvia. |
-| **Optoaccoppiatore PC817** | Componente che lascia all'ESP32 di “premere” virtualmente il pulsante del Pi senza collegare elettricamente i due circuiti: isola le tensioni e protegge entrambe le schede. |
+| **Interfaccia WAKE/J2** | Circuito tra ESP32 e pad J2 che simula il pulsante di accensione; il progetto attuale non prevede optoisolatore e il circuito elettrico va ancora definito e verificato. |
 | **I2C / UART / SPI** | Diversi standard di comunicazione tra schede e sensori: I2C per il BME280, UART per il GPS, SPI per letture analogiche tramite un convertitore ADC. |
 | **ADC / MCP3008** | Convertitore analogico-digitale: permette al Pi (che ha solo pin digitali) di leggere sensori che restituiscono una tensione, come umidità del suolo e metano. |
 | **NMEA / `$GPGGA`** | Standard e frase tipo usata dai ricevitori GPS per comunicare latitudine, longitudine e altre informazioni di posizione. |
@@ -88,7 +87,7 @@ In entrambe le applicazioni l’**analisi delle immagini avviene sul Raspberry**
                               campo (outdoor)
  ┌─────────────────────────────────────────────────────────────────┐
  │  Box principale                                                  │
- │  ┌──────────────┐   WAKE (pad J2 via opto) ┌──────────────────┐ │
+ │  ┌──────────────┐   WAKE (interfaccia da definire → J2) ┌───────┐ │
  │  │    ESP32     │─────────────────────────►│ Raspberry Pi 5   │ │
  │  │  previsione  │◄── ALIVE (GPIO17) ───────│ + 2 fotocamere   │ │
  │  │  + decisione │   dati BME (a richiesta  │ Camera Module 3  │ │
@@ -121,7 +120,7 @@ ESP32 e BME280 **restano alimentati** anche quando il Raspberry è in halt o spe
 
 | Linea | Direzione | Funzione |
 |-------|-----------|----------|
-| WAKE | ESP → pad J2 del Pi (tramite optoaccoppiatore) | Simula una pressione breve del pulsante di accensione |
+| WAKE | ESP → interfaccia elettrica da definire → pad J2 del Pi | Simula una pressione breve del pulsante di accensione |
 | ALIVE | GPIO17 del Pi → ESP | Dice all’ESP se il Pi è acceso |
 
 ### Consumo del Raspberry Pi 5
@@ -131,7 +130,7 @@ Il Pi 5 **non ha** lo spegnimento “leggero” in RAM (suspend-to-RAM). Stati u
 - **acceso** — acquisizione e analisi in corso;
 - **halt** — spento ma ancora collegato all’alimentazione; riaccendibile da pulsante o pad J2.
 
-Con l’impostazione EEPROM `POWER_OFF_ON_HALT=1`, in halt si spegne anche la linea a 3,3 V e il consumo tipico scende a circa **0,01 W**. Dettagli passo-passo: [piconfig.md](scripts%20and%20configuration/piconfig.md).
+Con l’impostazione EEPROM `POWER_OFF_ON_HALT=1`, in halt si spegne anche la linea a 3,3 V e il consumo tipico scende a circa **0,01 W**. Dettagli passo-passo: [configurazione e risveglio](config%24awakening.md).
 
 ### Ruoli dei componenti
 
@@ -172,7 +171,7 @@ La scelta dell’ottica **va fatta prima** del progetto definitivo del box (ingo
 
 L’ESP32 sta nel box principale; il BME280 sta fuori, nella sua custodia. Tra ESP e Pi: segnali WAKE/ALIVE e trasferimento delle misure (protocollo ancora da fissare: seriale, USB, ecc.).
 
-Il firmware in [`esp32/`](esp32/) oggi è una **bozza** di risveglio su scheda **ESP32-CAM**. Obiettivo di piano: ESP32 che legge il BME280 e applica previsione + decisione — vedi [espconfig.md](scripts%20and%20configuration/espconfig.md).
+Il firmware in [`esp32/`](esp32/) oggi è una **bozza** di risveglio su scheda **ESP32-CAM**. Obiettivo di piano: ESP32 che legge il BME280 e applica previsione + decisione — vedi [configurazione e risveglio](config%24awakening.md).
 
 ### 4.4 Altri sensori (sul Pi)
 
@@ -224,9 +223,7 @@ In sintesi:
 |----------|-----------|
 | `plan.pdf` | Piano operativo del progetto e fonte per obiettivi, hardware e attività |
 | `main.pdf` | Manoscritto scientifico di riferimento per forecaster, decider e valutazione energetica |
-| `scripts and configuration/piconfig.md` | Guida configurazione del Pi |
-| `scripts and configuration/espconfig.md` | Guida configurazione dell’ESP |
-| `scripts and configuration/pyexplanation.md` | Spiegazione di `sensors.py` |
+| `config$awakening.md` | Guida consolidata Pi/ESP, prove WAKE/J2 e archivio delle guide originali |
 | `scripts and configuration/capture_rpi.sh` | Wrapper per ambiente Python, scatto e burst dei sensori |
 | `scripts and configuration/sensors.py` | Lettura una tantum dei sensori **sul Pi** |
 | `scripts and configuration/insect-capture.service` | Servizio systemd per l’app selettiva |
