@@ -35,7 +35,7 @@ Documentazione di avanzamento del progetto di tesi, allineata al piano operativo
 | **POWER_OFF_ON_HALT = 1** | Impostazione EEPROM che, quando il Pi entra in halt, spegne il rail a 3,3 V. Il consumo tipico scende a circa 0,01 W; il Pi resta collegato alla presa e riaccendibile da pulsante o pad J2. |
 | **WAKE_ON_GPIO = 0** | Sul Pi 5 disabilita il risvevio via GPIO (usato sul Pi 4). L'accensione avviene tramite pulsante fisico o pad J2. |
 | **Pad J2** | Punti di contatto sulla scheda del Raspberry Pi che simulano la pressione del pulsante di accensione. Chiudendo brevemente i due pad il Pi si avvia. |
-| **Interfaccia WAKE/J2** | Circuito tra ESP32 e pad J2 che simula il pulsante di accensione; il progetto attuale non prevede optoisolatore e il circuito elettrico va ancora definito e verificato. |
+| **Interfaccia WAKE/J2** | Circuito tra ESP32 e pad J2 che simula il pulsante di accensione; il circuito elettrico va ancora definito e verificato. |
 | **I2C / UART / SPI** | Diversi standard di comunicazione tra schede e sensori: I2C per il BME280, UART per il GPS, SPI per letture analogiche tramite un convertitore ADC. |
 | **ADC / MCP3008** | Convertitore analogico-digitale: permette al Pi (che ha solo pin digitali) di leggere sensori che restituiscono una tensione, come umidità del suolo e metano. |
 | **NMEA / `$GPGGA`** | Standard e frase tipo usata dai ricevitori GPS per comunicare latitudine, longitudine e altre informazioni di posizione. |

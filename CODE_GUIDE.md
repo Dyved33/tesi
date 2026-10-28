@@ -23,7 +23,7 @@ Il BME280 di campo è previsto sul solo ESP32, ma non è ancora implementato il 
 Firmware Arduino per una scheda AI-Thinker ESP32-CAM. Definisce il pinout della camera integrata, `PIN_WAKE` (GPIO14) e `PIN_ALIVE` (GPIO13).
 
 - `piAlive()` legge ALIVE: HIGH indica che il rail osservato è presente; LOW è interpretato come Pi in halt.
-- `pulseJ2()` porta WAKE alto per 200 ms e poi lo riporta basso. L’optoisolatore non è previsto; il circuito di interfaccia tra GPIO14 e i pad J2 è ancora da definire e verificare elettricamente.
+- `pulseJ2()` porta WAKE alto per 200 ms e poi lo riporta basso. Il circuito di interfaccia tra GPIO14 e i pad J2 è ancora da definire e verificare elettricamente.
 - `waitForAlive()` controlla ALIVE ogni 250 ms fino al timeout.
 - `ensurePiOn()` non invia un secondo impulso se ALIVE è già alto; altrimenti invia WAKE e attende la risposta.
 - `initCamera()` configura il sensore della ESP32-CAM e sceglie buffer PSRAM/DRAM secondo la memoria rilevata.

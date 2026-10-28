@@ -9,8 +9,8 @@
  *
  * Collegamento di prova (vedi ../config$awakening.md):
  *   WAKE: GPIO14 comanda il circuito che chiude brevemente i due pad J2.
- *         Il progetto al momento non prevede un optoisolatore; il collegamento
- *         diretto è da definire e verificare elettricamente prima del cablaggio.
+ *         Il circuito di interfaccia è da definire e verificare elettricamente
+ *         prima del cablaggio.
  *   ALIVE: Pi GPIO17 → ESP GPIO13, pulldown 10kΩ lato ESP e massa comune.
  *          HIGH indica che GPIO17 è attivo; LOW che non lo è. Questo segnale
  *          non distingue il normale funzionamento dalla fase di shutdown.
@@ -56,7 +56,7 @@
 #define PCLK_GPIO_NUM     22
 
 // GPIO usati dal circuito esterno ESP32-Pi. WAKE comanda la chiusura breve J2;
-// il collegamento diretto senza optoisolatore va verificato prima del cablaggio.
+// Il circuito di interfaccia va definito e verificato prima del cablaggio.
 // ALIVE legge il livello proveniente dal GPIO17 del Pi, con pulldown esterno.
 constexpr int PIN_WAKE = 14;
 constexpr int PIN_ALIVE = 13;

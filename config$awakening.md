@@ -2,7 +2,7 @@
 
 Guida operativa consolidata dai documenti `piconfig.md`, `espconfig.md` e dalla nota storica `awakening.md`. Le sezioni seguono l'ordine consigliato: architettura, configurazione Pi, ESP e sensori, infine prove fisiche. Le versioni complete dei tre documenti di partenza sono conservate nelle appendici in fondo, così questa guida ne contiene tutto il materiale prima della rimozione dei file separati.
 
-> **Stato del progetto:** il firmware inizializza la camera ESP32-CAM AI-Thinker, ma `eventDetected()` scarta i frame e restituisce sempre `false`. Il wake automatico da camera quindi non è implementato; `w` dal monitor USB-seriale è solo un test manuale. Il codice BME280 non è ancora integrato nel firmware ESP. Inoltre il circuito elettrico tra WAKE e J2 non è stato definito: non è previsto un optoisolatore e non si deve collegare GPIO14 direttamente ai pad senza prima progettare e verificare l'interfaccia.
+> **Stato del progetto:** il firmware inizializza la camera ESP32-CAM AI-Thinker, ma `eventDetected()` scarta i frame e restituisce sempre `false`. Il wake automatico da camera quindi non è implementato; `w` dal monitor USB-seriale è solo un test manuale. Il codice BME280 non è ancora integrato nel firmware ESP. Inoltre il circuito elettrico tra WAKE e J2 non è stato definito: non si deve collegare GPIO14 direttamente ai pad senza prima progettare e verificare l'interfaccia.
 
 ## 1. Come dovrebbe funzionare
 
@@ -66,11 +66,11 @@ Protocollo, trasporto ESP→Pi e sincronizzazione degli orologi non sono ancora 
 
 ### Wake e interfaccia verso J2
 
-J2 è il connettore a due pad del Raspberry: chiudere brevemente i contatti simula il pulsante. Nel firmware GPIO14 viene impostato come uscita e `pulseJ2()` lo porta HIGH per 200 ms, poi LOW. Questo livello deve comandare un circuito che chiuda i due pad. L'optoisolatore non è previsto dalla documentazione corrente; tuttavia il circuito diretto non è ancora specificato. Prima di collegare GPIO14 a J2 occorre definire lo schema, controllare livelli e polarità e verificare l'interfaccia separatamente. Non trattare il codice firmware come schema elettrico.
+J2 è il connettore a due pad del Raspberry: chiudere brevemente i contatti simula il pulsante. Nel firmware GPIO14 viene impostato come uscita e `pulseJ2()` lo porta HIGH per 200 ms, poi LOW. Questo livello deve comandare un circuito che chiuda i due pad. Prima di collegare GPIO14 a J2 occorre definire lo schema, controllare livelli e polarità e verificare l'interfaccia separatamente. Non trattare il codice firmware come schema elettrico.
 
 La linea J2/pulsante può avviare il Pi da halt, ma una pressione prolungata può provocare uno spegnimento forzato. Per questo il firmware genera un impulso breve. La risposta esatta dipende dallo stato del Pi e dalla configurazione software.
 
-#### Proposta di schema senza optoisolatore
+#### Proposta di schema
 
 Userei un piccolo relè con contatto normalmente aperto (NO): i due terminali del contatto vanno ai due pad J2, come un pulsante esterno. GPIO14 non deve pilotare direttamente la bobina: comanda la base di un transistor NPN attraverso una resistenza. L'emettitore del transistor va a GND ESP; il collettore va a un capo della bobina e l'altro capo della bobina alla sua alimentazione nominale. Una resistenza base-emettitore mantiene il transistor spento durante il boot. Un diodo di ricircolo va in antiparallelo alla bobina, con catodo al positivo e anodo al collettore. Scegliere relè, transistor, resistenze, diodo e alimentazione in base alle specifiche dei componenti.
 
@@ -90,7 +90,7 @@ J2 pad 1 ───── contatto NO del relè ───── J2 pad 2
 
 D1 è in parallelo alla bobina: catodo al positivo bobina, anodo al collettore.
 
-Il contatto del relè resta separato elettricamente dalla bobina e collega solo i due terminali J2. La documentazione Raspberry descrive J2 come ingresso per un pulsante NO momentaneo che ponticella i due pad; il relè replica quel contatto. Un relè è diverso da un optoisolatore, pur mantenendo separati i due circuiti. Il contatto deve essere adatto a commutare un segnale di bassa tensione/corrente. Il diodo limita la sovratensione induttiva della bobina che altrimenti potrebbe danneggiare il transistor. Se si sceglie invece un transistor/MOSFET direttamente in parallelo a J2, prima bisogna conoscere schema e livelli dei due pad: non assumere che uno sia GND e non unire le masse senza averlo verificato. [Raspberry Pi: pulsante NO sui pad J2](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html) · [Omron: pilotaggio relè con transistor e soppressione del transitorio bobina](https://components.omron.com/us-en/faq/relays/FAQE10040).
+Il contatto del relè collega solo i due terminali J2. La documentazione Raspberry descrive J2 come ingresso per un pulsante NO momentaneo che ponticella i due pad; il relè replica quel contatto. Il contatto deve essere adatto a commutare un segnale di bassa tensione/corrente. Il diodo limita la sovratensione induttiva della bobina che altrimenti potrebbe danneggiare il transistor. Se si sceglie invece un transistor/MOSFET direttamente in parallelo a J2, prima bisogna conoscere schema e livelli dei due pad: non assumere che uno sia GND e non unire le masse senza averlo verificato. [Raspberry Pi: pulsante NO sui pad J2](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html) · [Omron: pilotaggio relè con transistor e soppressione del transitorio bobina](https://components.omron.com/us-en/faq/relays/FAQE10040).
 
 ### PSRAM e camera
 
@@ -437,7 +437,7 @@ Contesto: [README.md](README.md) · Pi: [sezione configurazione Pi](#2-raspberry
 | Lettura **BME280** | Unico host del sensore: T, umidità, pressione + timestamp |
 | Inoltro al Pi | A richiesta o alla cadenza dell’applicazione |
 | App selettiva (TMC) | **Forecaster** (GRU quantizzate) + **decider** (filtro biologico + raffinamento tipo HistGBT) → autorizza o meno il wake |
-| Wake hardware | Impulso che chiude i pad J2 solo se ALIVE basso; optoisolatore non previsto |
+| Wake hardware | Impulso che chiude i pad J2 solo se ALIVE basso |
 | Alimentazione | Sempre on, anche a Pi in halt |
 
 La possibile ESP32-CAM AI-Thinker può fare da sensore di rilevamento evento e richiedere il wake. Le foto di campo e le acquisizioni dettagliate restano affidate alle fotocamere sul Raspberry. La decisione di wake dovrà integrare il rilevamento con i dati BME280 e la politica ambientale prevista.
@@ -504,7 +504,7 @@ Su una scheda ESP32 “nuda” o DevKit i pin WAKE/ALIVE/I2C andranno riassegnat
 **WAKE**
 
 1. Il firmware porta GPIO14 alto per **200 ms**, poi basso.
-2. Non è previsto un optoisolatore. Il circuito che traduce questo segnale nella chiusura dei due pad J2 e la compatibilità elettrica vanno definiti e verificati prima del cablaggio. Non collegare GPIO14 direttamente ai pad senza aver verificato schema e livelli.
+2. Il circuito che traduce questo segnale nella chiusura dei due pad J2 e la compatibilità elettrica vanno definiti e verificati prima del cablaggio. Non collegare GPIO14 direttamente ai pad senza aver verificato schema e livelli.
 
 **ALIVE**
 
@@ -593,12 +593,11 @@ Board attuale in `platformio.ini`: `esp32cam`. Aggiornare `board` / pin quando s
 
 ### Appendice C — nota storica awakening
 
-> Nota di coerenza: l'introduzione originale qui sotto menzionava un optoisolatore sul Pi 5. È superata dalla decisione attuale documentata nella prima parte: nessun optoisolatore previsto e interfaccia WAKE/J2 da progettare. Il contenuto seguente è incluso solo come archivio del percorso Pi 4.
 # LEGACY — wake stile Pi 4 (GPIO3 + UART)
 
 > **Non applicare al Raspberry Pi 5 né al piano operativo attuale.**
 >
-> Documento storico. Sul Pi 5 il wake usa **pad J2 + optoaccoppiatore** e la linea **ALIVE**;
+> Documento storico. Sul Pi 5 il wake usa **pad J2** e la linea **ALIVE**;
 > l'ESP decide il wake con **forecaster/decider** sui dati **BME280** (non con UART di evento come qui sotto).
 >
 > **Perché non si usa sul Pi 5:** sul Pi 4 il wake si faceva portando GPIO3 a massa; sul Pi 5 quel pin non ha questa funzione e l'accensione avviene tramite pad J2 o pulsante fisico. Inoltre il Pi 5 non supporta `WAKE_ON_GPIO=1`. Questo documento è solo un riferimento storico.
