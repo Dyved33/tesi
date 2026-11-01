@@ -1,5 +1,8 @@
 /**
  * Bozza firmware per ESP32-CAM (AI-Thinker): trigger di prova e wake del Pi 5.
+ * Provenienza: logica di controllo e integrazione WAKE/ALIVE specifiche del
+ * progetto; usa API Arduino-ESP32 e del driver esp32-camera. Nei file presenti
+ * non è registrata una fonte online da cui siano state copiate parti.
  *
  * Stato attuale: inizializza la camera ESP, ma eventDetected() è uno stub che
  * scarta ogni frame e restituisce sempre false. Il wake è quindi provabile dal

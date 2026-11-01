@@ -10,6 +10,8 @@ for BME exist for data forwarded from the ESP; local I2C BME is bench-only.
 
 Edit the SENSORS dict to match actual wiring. See CODE_GUIDE.md for the walkthrough.
 """
+# Provenienza: dispatch dei sensori e scrittura CSV specifici del progetto; i driver
+# e le API sono forniti dai rispettivi progetti esterni. Fonte originale non registrata.
 
 import csv
 import os

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Entry point used manually or by systemd. It enters the project directory,
+# Provenienza: integrazione shell specifica del progetto, basata su comandi Bash standard.
+# Nel repository non è registrata una fonte online originale.
 # loads host-specific environment settings, activates Python, then runs the
 # photo client. In oneshot mode it also records one sensor CSV row; the
 # systemd unit (not this wrapper) requests poweroff after successful exit.

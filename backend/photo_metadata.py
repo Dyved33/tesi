@@ -10,6 +10,8 @@ and leaves image EXIF untouched. Missing measurements are represented by
 ``None``. The capture client currently assembles some metadata itself, so
 ``create_metadata_for_capture`` is a helper rather than its required path.
 """
+# Provenienza: formato e helper JSON specifici del progetto. Nel repository non è
+# registrata una fonte online originale di questo file.
 
 import json
 import logging

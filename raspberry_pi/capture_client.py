@@ -5,6 +5,9 @@
 the requested interval. This script does not read the field BME280: that
 sensor is wired to the ESP32 and no ESP-to-Pi data protocol exists yet.
 """
+# Provenienza: flusso di cattura e integrazione CLI specifici del progetto; le API
+# della camera e i moduli Python usati sono forniti dai rispettivi progetti esterni.
+# Nel repository non è registrata una fonte online originale di questo file.
 import argparse
 import logging
 import os

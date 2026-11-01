@@ -11,6 +11,8 @@ through a future ESP-to-Pi protocol. The capture client does not call this
 module. ``library="smbus"`` only checks the chip ID and deliberately returns
 empty measurements because compensation has not been implemented.
 """
+# Provenienza: selezione dei backend di prova specifica del progetto; accesso ai
+# sensori tramite API Adafruit CircuitPython o smbus2. Fonte originale non registrata.
 
 import logging
 from typing import Optional, Dict, Any

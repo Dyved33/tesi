@@ -7,6 +7,8 @@ receiver that emits ``$GNGGA`` needs an explicit extension. If pyserial is not
 installed, the function returns a dummy record (all measurements are ``None``)
 so callers can still exercise the metadata path without GPS hardware.
 """
+# Provenienza: parser NMEA e integrazione specifici del progetto; pySerial fornisce
+# l'API seriale. Nel repository non è registrata una fonte online originale.
 
 import logging
 import time

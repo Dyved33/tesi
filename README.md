@@ -11,9 +11,8 @@ Documentazione di avanzamento del progetto di tesi, allineata al piano operativo
 
 **Guide di configurazione:**
 
-- [Guida ai componenti software](CODE_GUIDE.md) — spiegazione di firmware, script, moduli Python e configurazioni
+- [Guida al codice](CODE_GUIDE.md) — descrizione dei sorgenti, dei prototipi e delle dipendenze
 - [Configurazione e risveglio](config%24awakening.md) — guida consolidata Pi/ESP e prove hardware
-- [Guida ai componenti software](CODE_GUIDE.md) — firmware, script, `sensors.py` e moduli Python `backend`
 
 ---
 
@@ -22,18 +21,18 @@ Documentazione di avanzamento del progetto di tesi, allineata al piano operativo
 | Termine | Significato in questo progetto |
 |---------|--------------------------------|
 | **Halt** | Il Raspberry è spento a livello software ma resta alimentato; si può riaccendere dal pulsante o dai pad J2. Non è “staccato dalla presa”. |
-| **Wake** | Impulso con cui l’ESP32 riaccende il Pi (simula la pressione del pulsante). |
-| **ALIVE** | Segnale dal Pi all’ESP: alto = Pi acceso; basso = Pi in halt. Evita di “premere” il pulsante se il Pi è già acceso. |
+| **Wake** | Impulso con cui l’ESP32 richiede l’accensione del Pi attraverso l’interfaccia prevista sui pad J2. |
+| **ALIVE** | Segnale GPIO dal Pi all’ESP, usato come indicatore elettrico; non conferma che Linux abbia completato il boot. |
 | **Forecaster** | Modulo sull’ESP che **prevede** temperatura e umidità (reti GRU quantizzate). |
 | **Decider** | Modulo sull’ESP che **decide** se svegliare il Pi (filtro biologico + classificatore di raffinamento). |
-| **App selettiva** | Il Pi resta in halt e si accende solo quando il decider autorizza uno scatto (studio dei consumi). |
+| **App selettiva** | Modalità prevista in cui il Pi si accende dopo l’autorizzazione del decider; il controllo automatico non è ancora implementato. |
 | **App continuativa** | Il Pi resta acceso in una fascia oraria e raccoglie immagini + misure per costruire un dataset. |
 | **TMC** | Manoscritto di riferimento sullo wake-up “biology-aware” (IEEE Transactions on Mobile Computing). |
 | **CV** | Computer vision: analisi delle immagini sul Raspberry (rilevamento, conteggio, area colonie, …). |
 | **BMSB** | Cimice asiatica (*Halyomorpha halys*), uno dei casi di studio. |
 | **EEPROM** | Memoria di configurazione del Raspberry Pi 5 che conserva le impostazioni anche a spento; qui si usa per impostare come si comporta il Pi in halt. |
 | **POWER_OFF_ON_HALT = 1** | Impostazione EEPROM che, quando il Pi entra in halt, spegne il rail a 3,3 V. Il consumo tipico scende a circa 0,01 W; il Pi resta collegato alla presa e riaccendibile da pulsante o pad J2. |
-| **WAKE_ON_GPIO = 0** | Sul Pi 5 disabilita il risvevio via GPIO (usato sul Pi 4). L'accensione avviene tramite pulsante fisico o pad J2. |
+| **WAKE_ON_GPIO = 0** | Impostazione prevista per la configurazione Pi 5 descritta nel progetto; verificare le opzioni con la documentazione della versione EEPROM installata. |
 | **Pad J2** | Punti di contatto sulla scheda del Raspberry Pi che simulano la pressione del pulsante di accensione. Chiudendo brevemente i due pad il Pi si avvia. |
 | **Interfaccia WAKE/J2** | Circuito tra ESP32 e pad J2 che simula il pulsante di accensione; il circuito elettrico va ancora definito e verificato. |
 | **I2C / UART / SPI** | Diversi standard di comunicazione tra schede e sensori: I2C per il BME280, UART per il GPS, SPI per letture analogiche tramite un convertitore ADC. |
@@ -223,14 +222,17 @@ In sintesi:
 |----------|-----------|
 | `plan.pdf` | Piano operativo del progetto e fonte per obiettivi, hardware e attività |
 | `main.pdf` | Manoscritto scientifico di riferimento per forecaster, decider e valutazione energetica |
-| `config$awakening.md` | Guida consolidata Pi/ESP, prove WAKE/J2 e archivio delle guide originali |
-| `scripts and configuration/capture_rpi.sh` | Wrapper per ambiente Python, scatto e burst dei sensori |
-| `scripts and configuration/sensors.py` | Lettura una tantum dei sensori **sul Pi** |
-| `scripts and configuration/insect-capture.service` | Servizio systemd per l’app selettiva |
-| `scripts and configuration/capture_client.py` | Scatto con `rpicam-still` e metadati GPS |
+| `config$awakening.md` | Configurazione Pi/ESP e sequenza di prove hardware |
+| `raspberry_pi/capture_rpi.sh` | Wrapper per ambiente Python, scatto e lettura sensori oneshot |
+| `raspberry_pi/sensors.py` | Prototipo di lettura sequenziale dei sensori collegati al Pi |
+| `raspberry_pi/insect-capture.service` | Esempio systemd per l’app selettiva, da adattare all’installazione |
+| `raspberry_pi/capture_client.py` | Scatto con `rpicam-still` e possibile aggiunta di coordinate GPS |
+| `raspberry_pi/data/sensors.csv` | Schema iniziale e record di esempio, non database definitivo |
 | `backend/` | Helper metadati e lettore GPS; `bme_reader.py` è solo per prove al banco |
 | `esp32/` | Firmware PlatformIO (oggi: risveglio; poi BME + politica) |
-| `schemi elettrici/` | Schemi KiCad, tra cui BME280 |
+| `configurazioni_fisiche/` | Progetti KiCad e documentazione hardware |
+
+Il firmware ESP è un prototipo: non implementa BME280, forecaster, decider o rilevamento automatico. Sul Pi sono presenti script iniziali, ma pin, sensori e modalità di raccolta non costituiscono una configurazione di campo verificata. Per i limiti dei singoli file e le note sulla provenienza del codice, consultare [CODE_GUIDE.md](CODE_GUIDE.md).
 
 **Ciclo tipico dell’app selettiva:**
 
@@ -238,12 +240,12 @@ In sintesi:
 ESP (previsione + decisione) autorizza
         → impulso WAKE sui pad J2
         → il Pi si avvia
-        → systemd lancia scripts and configuration/capture_rpi.sh --oneshot
+        → systemd lancia raspberry_pi/capture_rpi.sh --oneshot
         → foto JPG + lettura dei sensori Pi abilitati
         → systemctl poweroff → di nuovo in halt
 ```
 
-(`--oneshot` = una cattura, poi un burst dei sensori abilitati sul Pi; il servizio systemd esegue quindi `poweroff`. Il BME280 di campo non è ancora ricevuto dall’ESP.)
+(`--oneshot` = una cattura, poi un burst dei sensori abilitati sul Pi; il servizio systemd di esempio richiede quindi `poweroff` se il processo termina correttamente. Il BME280 di campo non è ancora ricevuto dall’ESP. Il client salva il sidecar solo quando è disponibile un fix GPS: vedi `CODE_GUIDE.md`.)
 
 ---
 
@@ -256,7 +258,7 @@ ESP (previsione + decisione) autorizza
 - [x] Camera Module 3 verificata (`rpicam-still`)
 - [x] Strategia halt + schema WAKE/ALIVE documentato
 - [x] Guide di configurazione e bozza firmware di risveglio in `esp32/`
-- [x] Bozza pipeline di cattura e sensori nel repository
+- [x] Prototipi iniziali di cattura immagini e lettura sensori presenti nel repository
 
 ### Da fare (come da piano)
 
