@@ -1,13 +1,36 @@
 #!/usr/bin/env python3
-"""Capture photos with the Raspberry Pi camera CLI and attach GPS sidecars.
+"""Scatta foto con la camera del Raspberry Pi e, se possibile, aggiunge il GPS.
 
-``--oneshot`` captures one image and exits; without it, the client repeats at
-the requested interval. This script does not read the field BME280: that
-sensor is wired to the ESP32 and no ESP-to-Pi data protocol exists yet.
+Lo scatto vero e proprio lo fa il comando ``rpicam-still`` (o il vecchio
+``libcamera-still``): questo script costruisce la riga di comando, la lancia
+e poi prova a leggere il GPS per salvare le coordinate nel JSON della foto.
+
+- con ``--oneshot`` fa una foto ed esce (è il caso dell'app selettiva);
+- senza, scatta in ciclo ogni ``--interval`` secondi.
+
+Si lancia come modulo, dalla cartella raspberry_pi/ (lo fa capture_rpi.sh)::
+
+    python3 -m smartcam.capture_client --oneshot
+
+Il BME280 di campo NON viene letto qui: è collegato all'ESP32 e il protocollo
+per farne arrivare i dati al Pi non esiste ancora.
 """
-# Provenienza: flusso di cattura e integrazione CLI specifici del progetto; le API
-# della camera e i moduli Python usati sono forniti dai rispettivi progetti esterni.
-# Nel repository non è registrata una fonte online originale di questo file.
+# Provenienza:
+# - Il flusso (scatto -> GPS -> JSON) e il parser degli argomenti sono scritti da noi.
+# - Le opzioni passate a rpicam-still (-n, -t, -o, --width, --height, --quality,
+#   --autofocus-mode/range/speed/window, --autofocus-on-capture, --shutter,
+#   --denoise, --sharpness, --contrast, --roi) vengono dalla documentazione
+#   ufficiale Raspberry Pi:
+#   https://www.raspberrypi.com/documentation/computers/camera_software.html#rpicam-still
+#   https://www.raspberrypi.com/documentation/computers/camera_software.html#camera-control-options
+# - I valori di default 4608x2592 sono la risoluzione piena del sensore IMX708
+#   della Camera Module 3 (dalla stessa documentazione).
+# - Lo zoom digitale tramite --roi centrato (build_center_roi) è un calcolo
+#   nostro basato sulla descrizione dell'opzione --roi nella documentazione.
+# - Valutata ma non adottata: la libreria ufficiale Picamera2
+#   (https://github.com/raspberrypi/picamera2) potrebbe sostituire la chiamata
+#   a rpicam-still, ma richiede di riscrivere tutto lo scatto e provarlo
+#   sulla camera vera (vedi issues.md).
 import argparse
 import logging
 import os
@@ -16,18 +39,20 @@ import time
 from datetime import datetime
 from shutil import which
 
-from backend.gps_reader import get_gps_fix
-from backend.photo_metadata import (
+from .gps_reader import get_gps_fix
+from .photo_metadata import (
     DEFAULT_METADATA,
     load_metadata_for_image_path,
     save_metadata_for_image_path,
 )
 
+# Cartella delle foto, relativa alla directory da cui si lancia lo script
+# (capture_rpi.sh fa prima cd nella root del progetto).
 IMAGE_DIR = "static/uploads/images"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Define CLI options for capture timing, image output and camera controls."""
+    """Definisce le opzioni da riga di comando: tempi, formato immagine e controlli camera."""
     parser = argparse.ArgumentParser(
         description="Camera capture client for Raspberry Pi (camera only)."
     )
@@ -144,7 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_af_settings(args: argparse.Namespace) -> dict[str, str | bool | None]:
-    """Start from the selected preset, then let explicit AF flags take priority."""
+    """Calcola le impostazioni dell'autofocus.
+
+    Si parte dal profilo scelto ("standard" o "macro") e poi si sovrascrive
+    con le opzioni --af-* passate esplicitamente, che hanno la precedenza.
+    """
     if args.profile == "macro":
         af = {
             "mode": "continuous",
@@ -176,15 +205,17 @@ def resolve_af_settings(args: argparse.Namespace) -> dict[str, str | bool | None
 
 
 def build_center_roi(zoom_factor: float) -> str | None:
-    """Return a centered normalized crop for digital zoom, or ``None`` at 1x.
+    """Calcola il ritaglio centrale per lo zoom digitale (``None`` se zoom = 1x).
 
-    Coordinates use the camera CLI's x,y,width,height fractions of the full
-    image. This crops the center; it does not provide optical zoom.
+    --roi vuole x,y,larghezza,altezza come frazioni (da 0 a 1) dell'immagine
+    intera. Con zoom 2x prendiamo un quadrato largo metà, centrato. È solo un
+    ritaglio: non aumenta il dettaglio come farebbe uno zoom ottico.
     """
     if zoom_factor <= 1.0:
         return None
 
     box_size = 1.0 / zoom_factor
+    # Limitiamo il ritaglio al 5% per evitare zoom assurdi (oltre 20x).
     box_size = max(0.05, min(1.0, box_size))
     x = (1.0 - box_size) / 2.0
     y = (1.0 - box_size) / 2.0
@@ -204,15 +235,19 @@ def capture_photo(
     sharpness: float,
     contrast: float,
 ) -> str | None:
-    """Run one still capture and save its JPG plus GPS data when available.
+    """Fa uno scatto, salva il JPG e, se c'è un fix GPS, il JSON con le coordinate.
 
-    Returns the image path on success, or ``None`` when no camera CLI exists
-    or the camera process fails. Camera output is written before GPS is read.
+    Restituisce il percorso dell'immagine se tutto va bene, ``None`` se il
+    comando della camera non esiste o fallisce. Il GPS viene letto DOPO lo
+    scatto, quindi la posizione si riferisce a qualche secondo più tardi.
     """
+    # Nome file con data e ora locali, al secondo (es. rpi_20261022-093524.jpg).
     os.makedirs(IMAGE_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     file_path = os.path.join(IMAGE_DIR, f"rpi_{timestamp}.jpg")
 
+    # Su Bookworm il comando si chiama rpicam-still; su sistemi più vecchi
+    # esiste solo libcamera-still, che accetta le stesse opzioni.
     camera_cmd = which("rpicam-still") or which("libcamera-still")
     if not camera_cmd:
         logging.error(
@@ -220,6 +255,7 @@ def capture_photo(
         )
         return None
 
+    # Riportiamo i parametri in intervalli sensati prima di passarli alla camera.
     quality = max(1, min(100, quality))
     width = max(320, width)
     height = max(240, height)
@@ -228,6 +264,8 @@ def capture_photo(
     sharpness = max(0.0, sharpness)
     contrast = max(0.0, contrast)
 
+    # -n = nessuna finestra di anteprima; -t = per quanti ms tenere accesa la
+    # camera prima di scattare (warmup + timeout sommati); -o = file di uscita.
     cmd = [
         camera_cmd,
         "-n",
@@ -252,6 +290,8 @@ def capture_photo(
         "-o",
         file_path,
     ]
+    # Le opzioni facoltative si aggiungono solo se impostate, così negli altri
+    # casi valgono i default della camera.
     if shutter > 0:
         cmd.extend(["--shutter", str(shutter)])
     if denoise:
@@ -288,43 +328,58 @@ def capture_photo(
         contrast,
     )
     try:
-        # A non-zero camera exit becomes CalledProcessError and is reported below.
+        # check=True: se la camera esce con errore parte CalledProcessError.
         subprocess.run(cmd, check=True)
-        metadata = load_metadata_for_image_path(file_path)
-        if not metadata:
-            metadata = dict(DEFAULT_METADATA)
-        metadata_updated = False
-
-        fix = get_gps_fix()
-        if fix:
-            metadata["latitude"] = fix["latitude"]
-            metadata["longitude"] = fix["longitude"]
-            metadata_updated = True
-            logging.info(
-                "GPS fix saved for %s: lat=%.7f lon=%.7f (%s)",
-                os.path.basename(file_path),
-                float(fix["latitude"]),
-                float(fix["longitude"]),
-                fix.get("gps_port", "unknown-port"),
-            )
-        else:
-            logging.info("No GPS fix available for %s", os.path.basename(file_path))
-
-        # The field BME280 is hosted by the ESP32. Until the ESP→Pi data
-        # protocol is implemented, this client must not read it over Pi I2C.
-
-        if metadata_updated:
-            save_metadata_for_image_path(file_path, metadata)
-
-        logging.info("Saved image: %s", file_path)
-        return file_path
     except subprocess.CalledProcessError as exc:
         logging.error("Capture failed: %s", exc)
         return None
 
+    # Da qui in poi la foto è già salvata: un problema con GPS o metadati non
+    # deve far risultare fallito lo scatto, quindi lo registriamo e basta.
+    try:
+        _attach_gps_metadata(file_path)
+    except Exception:
+        logging.exception("Metadata update failed for %s", file_path)
+
+    logging.info("Saved image: %s", file_path)
+    return file_path
+
+
+def _attach_gps_metadata(file_path: str) -> None:
+    """Legge il GPS e, se c'è un fix, salva le coordinate nel JSON della foto."""
+    # Se esiste già un JSON per questa foto lo aggiorniamo, altrimenti
+    # partiamo dalla struttura vuota di default.
+    metadata = load_metadata_for_image_path(file_path)
+    if not metadata:
+        metadata = dict(DEFAULT_METADATA)
+
+    # Il record "dummy" (librerie GPS mancanti) è un dizionario non vuoto ma
+    # con latitudine None: va trattato come "nessun fix".
+    # Nota: per ora copiamo solo latitudine e longitudine (vedi issues.md).
+    fix = get_gps_fix()
+    if not fix or fix.get("latitude") is None or fix.get("longitude") is None:
+        logging.info("No GPS fix available for %s", os.path.basename(file_path))
+        return
+
+    metadata["latitude"] = fix["latitude"]
+    metadata["longitude"] = fix["longitude"]
+    logging.info(
+        "GPS fix saved for %s: lat=%.7f lon=%.7f (%s)",
+        os.path.basename(file_path),
+        float(fix["latitude"]),
+        float(fix["longitude"]),
+        fix.get("gps_port", "unknown-port"),
+    )
+
+    # Qui andranno le misure del BME280 ricevute dall'ESP32, quando ci sarà
+    # il protocollo ESP→Pi. Il sensore di campo non va letto via I2C dal Pi.
+
+    # Il JSON viene scritto solo se abbiamo aggiunto qualcosa (oggi: solo col GPS).
+    save_metadata_for_image_path(file_path, metadata)
+
 
 def main() -> int:
-    """Parse options, then run one capture or the continuous capture loop."""
+    """Legge le opzioni, poi fa uno scatto singolo oppure parte con il ciclo continuo."""
     args = build_parser().parse_args()
     logging.basicConfig(
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -332,6 +387,8 @@ def main() -> int:
     )
     af_settings = resolve_af_settings(args)
 
+    # Modalità singola: exit code 0 se lo scatto è riuscito, 1 altrimenti
+    # (systemd lo usa per decidere se spegnere il Pi).
     if args.oneshot:
         return 0 if capture_photo(
             args.warmup_ms,
@@ -358,6 +415,9 @@ def main() -> int:
         args.timeout_ms,
     )
 
+    # Ciclo infinito: un errore di scatto viene solo registrato nel log e si
+    # riprova al giro dopo. La pausa parte DOPO lo scatto, quindi il periodo
+    # reale è un po' più lungo di --interval.
     while True:
         capture_photo(
             args.warmup_ms,

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Read and write image metadata in a neighboring JSON sidecar file.
+"""Metadati delle foto salvati in un file JSON accanto all'immagine.
 
-Provides DEFAULT_METADATA, load_metadata_for_image_path, save_metadata_for_image_path
-compatible with capture_client.py expectations.
+Per ogni foto ``foto.jpg`` scriviamo ``foto.json`` (il cosiddetto "sidecar")
+con posizione, misure ambientali e impostazioni della camera. Abbiamo scelto
+il JSON separato invece dei tag EXIF perché è più semplice da leggere e da
+estendere, e non tocca il file immagine. I valori mancanti sono ``None``.
 
-Stores metadata as JSON sidecar files (same name as image, .json extension).
-The sidecar has the same basename as its image (``photo.jpg`` → ``photo.json``)
-and leaves image EXIF untouched. Missing measurements are represented by
-``None``. The capture client currently assembles some metadata itself, so
-``create_metadata_for_capture`` is a helper rather than its required path.
+``capture_client.py`` usa le funzioni di lettura/scrittura e
+``DEFAULT_METADATA``; ``create_metadata_for_capture`` è un helper pronto ma
+per ora il client non lo chiama.
 """
-# Provenienza: formato e helper JSON specifici del progetto. Nel repository non è
-# registrata una fonte online originale di questo file.
+# Provenienza: formato del JSON e funzioni scritte da noi, usando solo la
+# libreria standard di Python (json, os). Nessuna fonte esterna.
 
 import json
 import logging
@@ -20,8 +20,8 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Stable sidecar shape: readers can rely on these keys even before sensors
-# are connected. Optional readings populate the corresponding fields below.
+# Struttura "fissa" del sidecar: chi legge il JSON trova sempre queste chiavi,
+# anche quando il sensore corrispondente non è collegato (valore None).
 DEFAULT_METADATA = {
     "latitude": None,
     "longitude": None,
@@ -36,20 +36,20 @@ DEFAULT_METADATA = {
 
 
 def _get_metadata_path(image_path: str) -> str:
-    """Map an image path to its same-basename JSON sidecar path."""
+    """Dal percorso della foto ricava quello del JSON (stesso nome, estensione .json)."""
     base, _ = os.path.splitext(image_path)
     return base + ".json"
 
 
 def load_metadata_for_image_path(image_path: str) -> Optional[Dict[str, Any]]:
-    """
-    Load metadata from sidecar JSON file.
+    """Legge il JSON associato a una foto.
 
     Args:
-        image_path: Path to the image file
+        image_path: percorso dell'immagine.
 
     Returns:
-        Metadata dict or None if not found/invalid
+        Il dizionario dei metadati, oppure None se il file non c'è o non è
+        un JSON valido.
     """
     meta_path = _get_metadata_path(image_path)
     if not os.path.exists(meta_path):
@@ -64,19 +64,19 @@ def load_metadata_for_image_path(image_path: str) -> Optional[Dict[str, Any]]:
 
 
 def save_metadata_for_image_path(image_path: str, metadata: Dict[str, Any]) -> bool:
-    """
-    Save metadata to sidecar JSON file.
+    """Scrive (o sovrascrive) il JSON associato a una foto.
 
     Args:
-        image_path: Path to the image file
-        metadata: Metadata dict to save
+        image_path: percorso dell'immagine.
+        metadata: dizionario da salvare.
 
     Returns:
-        True on success, False on failure
+        True se il salvataggio è andato bene, False altrimenti.
     """
     meta_path = _get_metadata_path(image_path)
     try:
         with open(meta_path, "w") as f:
+            # default=str evita errori con tipi non serializzabili (es. datetime).
             json.dump(metadata, f, indent=2, default=str)
         logger.debug(f"Saved metadata to {meta_path}")
         return True
@@ -91,20 +91,24 @@ def create_metadata_for_capture(
     bme_reading: Optional[Dict[str, Any]] = None,
     camera_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build the standard metadata record from available sensor readings.
+    """Costruisce il record standard a partire dalle letture disponibili.
 
     Args:
-        image_path: Reserved for caller context; this helper does not write files
-        gps_fix: Dict from get_gps_fix()
-        bme_reading: Dict from get_bme280_reading()
-        camera_settings: Dict of camera parameters used
+        image_path: per ora non usato (la funzione non scrive file).
+        gps_fix: risultato di get_gps_fix().
+        bme_reading: risultato di get_bme280_reading().
+        camera_settings: parametri usati per lo scatto.
 
     Returns:
-        A fresh mapping; absent GPS/BME values remain ``None``. The timestamp
-        records when this helper ran, in UTC, not the sensor measurement time.
+        Il dizionario dei metadati; i campi GPS/BME assenti restano None.
+        Il timestamp (UTC) è il momento in cui gira questa funzione, non
+        quello della misura dei sensori.
     """
     from datetime import datetime, timezone
 
+    # ATTENZIONE: dict() fa una copia superficiale, quindi "camera_settings" e
+    # "sensor_readings" restano gli stessi oggetti di DEFAULT_METADATA e le
+    # modifiche qui sotto si propagano alle chiamate successive (vedi issues.md).
     metadata = dict(DEFAULT_METADATA)
     metadata["capture_timestamp"] = datetime.now(timezone.utc).isoformat()
 
@@ -127,20 +131,18 @@ def create_metadata_for_capture(
 
 
 if __name__ == "__main__":
-    # Quick test
+    # Prova veloce: crea una finta immagine, salva e rilegge il JSON, poi pulisce.
     import tempfile
     logging.basicConfig(level=logging.DEBUG)
 
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
         test_img = f.name
 
-    # Test save/load
     meta = create_metadata_for_capture(test_img, camera_settings={"width": 4608, "height": 2592})
     save_metadata_for_image_path(test_img, meta)
 
     loaded = load_metadata_for_image_path(test_img)
     print(f"Loaded: {loaded}")
 
-    # Cleanup
     os.unlink(test_img)
     os.unlink(_get_metadata_path(test_img))
