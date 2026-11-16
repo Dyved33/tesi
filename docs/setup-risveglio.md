@@ -4,9 +4,9 @@ Questa guida raccoglie le configurazioni di Pi ed ESP32 e l'ordine in cui convie
 
 ## A che punto siamo
 
-- **ESP32:** il firmware in `firmware/esp32/src/main.cpp` gira su una ESP32-CAM AI-Thinker. Sa svegliare il Pi, ma solo a mano (comando `w` dal monitor seriale): il rilevamento automatico è uno stub che non scatta mai. Non legge ancora il BME280 e non contiene forecaster né decider.
-- **Circuito di risveglio:** lo schema c'è (optoisolatore PC817, vedi sotto), ma va ancora montato e provato.
-- **Raspberry Pi:** ci sono gli script di scatto e di lettura sensori, con alcuni bug noti ([issues.md](../issues.md)). Database, modalità continuativa e analisi delle immagini sono ancora da fare.
+- **ESP32:** il firmware in `firmware/esp32/src/main.cpp` gira su una ESP32-CAM AI-Thinker. Sa svegliare il Pi, ma solo a mano per il momento (comando `w` dal monitor seriale): il rilevamento automatico è uno stub che non scatta mai. Non legge ancora il BME280 e non contiene forecaster né decider.
+- **Circuito di risveglio:** lo schema c'è, ma va ancora montato e provato.
+- **Raspberry Pi:** ci sono gli script di scatto e di lettura sensori. Database, modalità continuativa e analisi delle immagini sono ancora da fare.
 
 ---
 
@@ -152,13 +152,3 @@ Nel monitor, scrivere `w` e premere Invio prova il percorso di wake a mano.
 Secondo il piano GPS, sensore acqua, umidità del suolo e metano vanno sul Pi, mentre il BME280 va solo sull'ESP. Le interfacce previste sono UART per il GPS, ADC (MCP3008 su SPI) per i sensori analogici e GPIO per gli ingressi digitali. Dipendono però dai modelli che compreremo. I pin in `raspberry_pi/smartcam/sensors.py` sono solo un esempio.
 
 Il flusso `--oneshot` fa una foto, legge i sensori una volta e termina, così il servizio può spegnere il Pi. La modalità continuativa (cadenze diverse per foto e misure, fascia oraria, database) non è ancora implementata.
-
----
-
-## Riferimenti
-
-- [Piano operativo](plan.pdf)
-- [Documentazione Raspberry Pi 5](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html)
-- [Firmware ESP32](../firmware/esp32/src/main.cpp)
-- [Guida al codice](guida-codice.md)
-- [Problemi noti](../issues.md)

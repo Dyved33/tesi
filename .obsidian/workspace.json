@@ -4,77 +4,17 @@
     "type": "split",
     "children": [
       {
-        "id": "257613b9260ccf18",
+        "id": "78d9851142b716b7",
         "type": "tabs",
         "children": [
           {
-            "id": "79ad6d95bbab723b",
+            "id": "ccccd1079b0feeda",
             "type": "leaf",
             "state": {
-              "type": "markdown",
-              "state": {
-                "file": "README.md",
-                "mode": "source",
-                "source": false
-              },
+              "type": "empty",
+              "state": {},
               "icon": "lucide-file",
-              "title": "README"
-            }
-          },
-          {
-            "id": "cdc3129ae2d85eaa",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "docs/guida-codice.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "guida-codice"
-            }
-          },
-          {
-            "id": "434a18060bda90e0",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "docs/setup-risveglio.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "setup-risveglio"
-            }
-          },
-          {
-            "id": "5f124d4cca1c627c",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "issues.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "issues"
-            }
-          },
-          {
-            "id": "147a23cdf1cc0f57",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "more.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "more"
+              "title": "New tab"
             }
           }
         ]
@@ -245,11 +185,11 @@
       "bases:Create new base": false
     }
   },
-  "active": "79ad6d95bbab723b",
+  "active": "ccccd1079b0feeda",
   "lastOpenFiles": [
-    "more.md",
-    "issues.md",
     "docs/setup-risveglio.md",
+    "issues.md",
+    "more.md",
     "docs/guida-codice.md",
     "README.md"
   ]

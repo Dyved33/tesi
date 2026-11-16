@@ -1,6 +1,6 @@
 # Guida al codice
 
-Qui spieghiamo cosa fa ogni file sorgente e, soprattutto, **cosa non fa ancora**. Gli obiettivi completi del progetto sono descritti in [`plan.pdf`](plan.pdf): il codice di oggi ne copre solo una parte. I bug che conosciamo sono in [issues.md](../issues.md).
+Qui spieghiamo cosa fa ogni file sorgente e, soprattutto, **cosa non fa ancora**. Gli obiettivi completi del progetto sono descritti in [`plan.pdf`](plan.pdf): il codice di oggi ne copre solo una parte. 
 
 ## Il quadro generale
 
@@ -35,11 +35,9 @@ Due cose da sapere:
 - ALIVE alto significa solo che il GPIO17 del Pi è alto, non che Linux abbia finito il boot;
 - se la camera non parte il firmware si blocca, e a quel punto non risponde nemmeno al comando `w`.
 
-> ⚠️ Il firmware **non è mai stato compilato** durante l'ultima revisione: vedi [issues.md #27](../issues.md).
-
 ### `platformio.ini`
 
-Board `esp32cam`, framework Arduino, monitor a 115200 baud. Quando sceglieremo l'ESP definitivo andrà aggiornato.
+Board `esp32cam`, framework Arduino, monitor a 115200 baud. Sarà necessario modificare i PIN
 
 ### `include/secrets.h.example`
 
@@ -107,7 +105,7 @@ Cose da tenere a mente:
 - i valori di suolo e metano sono tensioni grezze: la percentuale di umidità è una proporzione non calibrata e i ppm di metano non vengono calcolati;
 - il BME280 è disabilitato, perché in campo i suoi dati arriveranno dall'ESP;
 - il timestamp è quello della riga, non delle singole misure;
-- se una lettura fallisce si ripiega sul dummy, ma il sensore viene contato come "ok" lo stesso ([issues.md #6](../issues.md)).
+- se una lettura fallisce si ripiega sul dummy, ma il sensore viene contato come "ok" lo stesso 
 
 Il CSV contiene per ora solo l'intestazione e una riga di prova. Più avanti ci finiranno i dati estratti dal database.
 
@@ -149,9 +147,6 @@ All'inizio di ogni file c'è una sezione **"Provenienza"** che distingue le part
 | Inizializzazione di pyenv | README di pyenv |
 | Opzioni di `rpicam-still` | documentazione ufficiale Raspberry Pi |
 | Direttive dell'unità systemd | documentazione di systemd |
-
-Il resto l'abbiamo scritto noi: la logica WAKE/ALIVE, il flusso di scatto, il dispatcher dei sensori, il formato di CSV e JSON e gli script di avvio.
-
 ### Sostituzioni con librerie esistenti
 
 Abbiamo controllato, script per script, se una libreria o un esempio ufficiale potesse sostituire il nostro codice fatto a mano. Dove la sostituzione era piccola e riduceva i bug l'abbiamo fatta, altrimenti l'abbiamo solo annotata.
@@ -169,16 +164,3 @@ Abbiamo controllato, script per script, se una libreria o un esempio ufficiale p
 | `main.cpp` | logica WAKE/ALIVE | niente da sostituire. Per il BME280 sull'ESP useremo la libreria [Adafruit_BME280](https://github.com/adafruit/Adafruit_BME280_Library) invece di scrivere un driver |
 
 **Regola per il futuro:** quando copiamo o adattiamo codice da internet, aggiungiamo subito nel file un commento con l'URL, l'autore o il progetto, la licenza e cosa abbiamo modificato.
-
----
-
-## Struttura delle cartelle
-
-```text
-README.md                 presentazione e stato del progetto
-issues.md                 problemi noti nel codice
-docs/                     plan.pdf, questa guida, setup-risveglio.md, immagini
-firmware/esp32/           firmware PlatformIO
-raspberry_pi/             software del Pi (package smartcam, systemd, dati)
-hardware/                 schemi KiCad e documentazione hardware
-```

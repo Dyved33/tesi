@@ -1,7 +1,5 @@
 # Altro che si può fare per la tesi
 
-Idee per migliorare il repository oltre ai problemi elencati in [issues.md](issues.md).
-
 ## Documentazione del codice
 
 - **Sphinx.** Le docstring sono già in stile Google, quindi bastano le estensioni `sphinx.ext.autodoc` e `sphinx.ext.napoleon`. In `conf.py` bisogna aggiungere `raspberry_pi/` a `sys.path` e impostare `autodoc_mock_imports = ["board", "gpiozero", "RPi", "smbus2", "bme280"]`: così la documentazione si genera anche su PC, senza le librerie hardware.

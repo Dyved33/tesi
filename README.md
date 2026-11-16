@@ -5,16 +5,15 @@ Questo è il repository della nostra tesi triennale: una smart camera da lasciar
 **Tesisti:** David Cardinali e Tommaso Garofani  
 **Relatore:** Francesco Betti Sorbelli  
 **Correlatori:** Lorenzo Palazzetti e Cristina M. Pinotti  
-**Università degli Studi di Perugia**. Raccolta dati in campo prevista per la **primavera 2027**, laurea indicativamente a **luglio 2027**.
+**Università degli Studi di Perugia**. Raccolta dati in campo prevista per la **primavera 2027**.
 
 Documenti da cui partire:
 
-- [`docs/plan.pdf`](docs/plan.pdf): il piano operativo concordato il 19 ottobre 2026, che fa da riferimento per obiettivi e requisiti;
+- [`docs/plan.pdf`](docs/plan.pdf): il piano operativo che fa da riferimento per obiettivi e requisiti;
 - [Guida al codice](docs/guida-codice.md): cosa fa ogni file sorgente e cosa ancora non fa;
 - [Configurazione e risveglio](docs/setup-risveglio.md): come configurare Pi ed ESP32 e in che ordine fare le prove al banco;
-- [Problemi aperti](issues.md): i bug e le cose da sistemare che abbiamo trovato nel codice.
 
-Per la parte di acquisizione selettiva ci basiamo sul manoscritto *A Two-Tier Biology-Aware Wake-Up Control for Energy-Measured IoT Insect Monitoring*, sottoposto a IEEE Transactions on Mobile Computing (TMC). Il manoscritto è riservato e per questo **non è incluso nel repository**.
+Per la parte di acquisizione selettiva ci basiamo sul manoscritto *A Two-Tier Biology-Aware Wake-Up Control for Energy-Measured IoT Insect Monitoring*. Il manoscritto è riservato e per questo **non è incluso nel repository**.
 
 ---
 
@@ -22,7 +21,7 @@ Per la parte di acquisizione selettiva ci basiamo sul manoscritto *A Two-Tier Bi
 
 Vogliamo costruire una camera **modulare**: un box stagno con dentro un **Raspberry Pi 5**, un **ESP32**, due fotocamere e una morsettiera a cui collegare i vari sensori. All'inizio sarà alimentata dalla rete elettrica.
 
-I casi di studio possibili sono la cimice asiatica (BMSB), formiche, bombi, api e altri insetti. Un caso a parte è l'**afide lanigero del melo**: i singoli individui sono troppo piccoli per essere contati, quindi lì misuriamo l'**area delle colonie lanose** e come cambia nel tempo.
+I casi di studio possibili sono la cimice asiatica (BMSB), formiche, bombi, api e altri insetti. Un caso a parte è l'**afide lanigero del melo**: i singoli individui sono troppo piccoli per essere contati, quindi lì misuriamo l'**area delle colonie lanose** e come cambiano nel tempo.
 
 Lo stesso hardware deve supportare **due applicazioni**, che cambiano solo nel software:
 
@@ -157,17 +156,16 @@ All'inizio useremo il Wi-Fi del laboratorio, poi un modem 4G. Acquisizione e sal
 
 ## Cosa c'è nel repository
 
-| Percorso | Contenuto |
-|---|---|
-| `issues.md` | problemi noti nel codice |
-| `docs/` | piano operativo, guida al codice, guida di configurazione, immagini |
-| `raspberry_pi/smartcam/` | package Python: scatto, lettura sensori, GPS, BME280 da banco, metadati delle foto |
-| `raspberry_pi/capture_rpi.sh` | script di avvio dello scatto (a mano o da systemd) |
-| `raspberry_pi/systemd/` | unità systemd e modello delle variabili d'ambiente |
-| `raspberry_pi/data/` | `sensors.csv`, il file in cui finiranno le misure |
-| `raspberry_pi/requirements.txt` | dipendenze Python |
-| `firmware/esp32/` | firmware PlatformIO per l'ESP32 |
-| `hardware/` | schemi KiCad: collegamento Pi–ESP e sensore BME280 |
+| Percorso                        | Contenuto                                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| `docs/`                         | piano operativo, guida al codice, guida di configurazione, immagini                |
+| `raspberry_pi/smartcam/`        | package Python: scatto, lettura sensori, GPS, BME280 da banco, metadati delle foto |
+| `raspberry_pi/capture_rpi.sh`   | script di avvio dello scatto (a mano o da systemd)                                 |
+| `raspberry_pi/systemd/`         | unità systemd e modello delle variabili d'ambiente                                 |
+| `raspberry_pi/data/`            | `sensors.csv`, il file in cui finiranno le misure                                  |
+| `raspberry_pi/requirements.txt` | dipendenze Python                                                                  |
+| `firmware/esp32/`               | firmware PlatformIO per l'ESP32                                                    |
+| `hardware/`                     | schemi KiCad: collegamento Pi–ESP e sensore BME280                                 |
 
 Il codice è ancora a livello di **prototipo**. Il firmware ESP gestisce il risveglio ma non ha ancora BME280, forecaster e decider. Sul Pi ci sono i primi script di scatto e lettura sensori, ma pin e sensori non sono ancora la configurazione di campo. I problemi noti sono in [issues.md](issues.md).
 
