@@ -1,7 +1,7 @@
 /**
- * Firmware di prova per ESP32-CAM (AI-Thinker): risveglio del Raspberry Pi 5.
+ * Firmware per ESP32-CAM (AI-Thinker): risveglio del Raspberry Pi 5.
  *
- * Cosa fa oggi:
+ * Cosa fa:
  * - inizializza la camera della ESP32-CAM e a ogni giro acquisisce un frame,
  *   ma eventDetected() è ancora uno stub e restituisce sempre false: niente
  *   wake automatici;
@@ -138,7 +138,7 @@ bool ensurePiOn() {
   return true;
 }
 
-// Inizializza la camera. Adattato da CameraWebServer.ino di Espressif.
+// Inizializza la camera. Adattato da CameraWebServer.ino (github)
 bool initCamera() {
   camera_config_t config;
   // Canale e timer LEDC: il driver li usa per generare il clock XCLK.

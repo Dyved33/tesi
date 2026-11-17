@@ -5,7 +5,7 @@ Serve SOLO per le prove al banco. Secondo plan.pdf, in campo il BME280 è
 collegato all'ESP32 e il Pi dovrà ricevere le misure da lì (con il loro
 timestamp), tramite un protocollo ESP→Pi che non abbiamo ancora scritto.
 
-Ci sono tre "backend" tra cui scegliere:
+Ci sono tre librerie tra cui scegliere:
 - ``adafruit``: libreria Adafruit CircuitPython;
 - ``smbus``: libreria RPi.bme280 sopra smbus2 (più leggera, niente Blinka);
 - ``dummy``: nessun hardware, restituisce un record vuoto.
@@ -27,7 +27,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 # Le librerie hardware potrebbero non essere installate (ad esempio sul PC
-# di sviluppo): in quel caso ce lo segniamo e useremo un altro backend.
+# di sviluppo): in quel caso ce lo segnamo e useremo un altro backend.
 try:
     import board
     from adafruit_bme280 import basic as adafruit_bme280

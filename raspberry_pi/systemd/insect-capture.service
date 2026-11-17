@@ -1,7 +1,5 @@
 # Unità systemd per l'app selettiva: al boot (dopo il wake dall'ESP) fa
 # una foto + lettura sensori e poi spegne il Pi (halt).
-# NON abilitarla per il monitoraggio continuo o durante le prove: il Pi si
-# spegnerebbe dopo ogni avvio.
 # Utente e percorsi sono quelli del nostro Pi (rpi5-03): vanno adattati.
 # Documentazione: ../../docs/setup-risveglio.md
 #
