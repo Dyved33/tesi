@@ -87,7 +87,9 @@ In `firmware/esp32/platformio.ini` la board è `esp32cam`. Il firmware usa:
 
 Sulla ESP32-CAM quasi tutti i pin sono occupati dalla camera. In particolare il **GPIO21 è il segnale Y5 della camera**, quindi non si può usare come SDA per il BME280 finché la camera è attiva. È uno dei motivi per cui la scheda definitiva sarà un'altra.
 
-Il BME280 va **solo sull'ESP32**, fuori dal box, nella sua custodia. Lo schema di collegamento (modulo GY-BME280: SDA su GPIO21, SCL su GPIO22, indirizzo `0x76`) è in [`hardware/sensors/BME280/`](../hardware/sensors/BME280/GY-BME280.md.md). Su quale protocollo usare per mandare le misure al Pi (seriale, USB, …), sul formato dei dati e sulla sincronizzazione degli orologi dobbiamo ancora decidere.
+Il BME280 va **solo sull'ESP32**, fuori dal box, nella sua custodia. Il driver è `firmware/esp32/src/bme_reader.cpp` e usa una sola libreria, Adafruit BME280 per Arduino, dichiarata in `platformio.ini`; `beginBme280()` avvia I²C sui pin passati e `readBme280()` restituisce temperatura in °C, umidità in percentuale e pressione in hPa. Lo schema del modulo GY-BME280 (indirizzo `0x76`) è in [`hardware/sensors/BME280/`](../hardware/sensors/BME280/GY-BME280.md.md).
+
+Il driver è pronto ma non viene ancora chiamato dal programma principale. Inoltre i pin dello schema (SDA GPIO21, SCL GPIO22) sulla ESP32-CAM corrente sono occupati rispettivamente dalla camera (Y5 e PCLK): **non collegare il BME a quei pin finché si usa la camera**. Occorre scegliere pin I²C liberi compatibili con la scheda definitiva prima di inizializzare il driver. Il protocollo, il formato e la sincronizzazione per trasferire le misure dall'ESP al Pi restano da definire.
 
 ---
 
@@ -135,13 +137,19 @@ Conviene procedere un pezzo alla volta e annotare ogni volta scheda, pin, alimen
 9. Quando ci sarà il rilevamento: casi positivi e negativi, cooldown, comportamento con Pi acceso e in halt.
 10. Solo alla fine abilitare il servizio di scatto, dopo aver verificato che foto e spegnimento funzionino.
 
-Per compilare, caricare e aprire il monitor seriale, dalla cartella `firmware/esp32/`:
+Sì: `platformio.ini` configura compilazione e dipendenze, mentre il caricamento si esegue con il target `upload`. Installare PlatformIO Core (`pio`) oppure l'estensione PlatformIO IDE, collegare la scheda via USB e aprire un terminale nella root del repository. Poi entrare nella cartella del progetto firmware ed eseguire:
 
 ```bash
-pio run                 # compila
-pio run -t upload       # carica sulla scheda
-pio device monitor      # monitor seriale a 115200 baud
+cd firmware/esp32
+pio run                                      # compila e scarica le librerie dichiarate
+pio run -t upload                           # compila, poi carica sulla scheda
+pio device monitor                          # monitor seriale a 115200 baud
+# Se PlatformIO non trova la porta USB, indicarla esplicitamente, per esempio:
+pio run -t upload --upload-port /dev/ttyUSB0
+pio device monitor --port /dev/ttyUSB0
 ```
+
+Su Windows la porta è tipicamente `COM3` (sostituire con quella mostrata dal sistema); su macOS `/dev/cu.usbserial-...`. La porta dipende dal convertitore USB della scheda. Per il primo caricamento della ESP32-CAM può essere necessario mettere la scheda in modalità bootloader (GPIO0 a GND durante il reset), poi rimuovere il ponticello e riavviare.
 
 Nel monitor, scrivere `w` e premere Invio prova il percorso di wake a mano.
 

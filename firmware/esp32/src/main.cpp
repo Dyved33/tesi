@@ -8,7 +8,9 @@
  * - se dal monitor seriale si invia 'w', prova a svegliare il Pi;
  * - per svegliarlo dà un impulso su WAKE (GPIO14) e poi aspetta che il Pi
  *   alzi ALIVE (GPIO13).
- * Non c'è ancora niente di BME280, forecaster o decider: l'obiettivo finale
+ * Il driver BME280 è in bme_reader.cpp, ma non viene inizializzato qui:
+ * sulla ESP32-CAM i pin indicati nello schema I2C sono usati dalla camera.
+ * Mancano ancora integrazione del sensore, forecaster e decider: l'obiettivo finale
  * è un ESP sempre acceso che legge il BME280 e decide quando svegliare il Pi.
  *
  * Collegamenti (schema in hardware/pi5->esp32/ nella root del repository):

@@ -8,7 +8,3 @@
 pyserial>=3.5              # seriale del GPS
 pynmea2>=1.19              # parsing delle frasi NMEA
 gpiozero>=2.0              # GPIO e ADC MCP3008
-
-# Solo per le prove al banco con il BME280 collegato al Pi (scegliere uno dei due):
-adafruit-circuitpython-bme280>=2.6   # backend "adafruit"
-RPi.bme280>=0.2.4                    # backend "smbus" (porta con sé smbus2)

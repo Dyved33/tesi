@@ -159,15 +159,15 @@ All'inizio useremo il Wi-Fi del laboratorio, poi un modem 4G. Acquisizione e sal
 | Percorso                        | Contenuto                                                                          |
 | ------------------------------- | ---------------------------------------------------------------------------------- |
 | `docs/`                         | piano operativo, guida al codice, guida di configurazione, immagini                |
-| `raspberry_pi/smartcam/`        | package Python: scatto, lettura sensori, GPS, BME280 da banco, metadati delle foto |
+| `raspberry_pi/smartcam/`        | package Python: scatto, lettura sensori del Pi, GPS, metadati delle foto |
 | `raspberry_pi/capture_rpi.sh`   | script di avvio dello scatto (a mano o da systemd)                                 |
 | `raspberry_pi/systemd/`         | unità systemd e modello delle variabili d'ambiente                                 |
 | `raspberry_pi/data/`            | `sensors.csv`, il file in cui finiranno le misure                                  |
 | `raspberry_pi/requirements.txt` | dipendenze Python                                                                  |
-| `firmware/esp32/`               | firmware PlatformIO per l'ESP32                                                    |
+| `firmware/esp32/`               | firmware PlatformIO per l'ESP32, incluso il driver BME280                           |
 | `hardware/`                     | schemi KiCad: collegamento Pi–ESP e sensore BME280                                 |
 
-Il codice è ancora a livello di **prototipo**. Il firmware ESP gestisce il risveglio ma non ha ancora BME280, forecaster e decider. Sul Pi ci sono i primi script di scatto e lettura sensori, ma pin e sensori non sono ancora la configurazione di campo. I problemi noti sono in [issues.md](issues.md).
+Il codice è ancora a livello di **prototipo**. Il firmware ESP gestisce il risveglio e contiene un driver BME280 non ancora collegato al flusso principale; mancano forecaster, decider e protocollo ESP→Pi. Sul Pi ci sono i primi script di scatto e lettura sensori, ma pin e sensori non sono ancora la configurazione di campo. I problemi noti sono in [issues.md](issues.md).
 
 Per provare il software del Pi:
 

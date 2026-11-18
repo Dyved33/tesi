@@ -112,14 +112,14 @@ Sull'ESP32 alcuni pin, tra cui il GPIO14, mandano un segnale PWM durante il boot
 
 ## 🟡 Minori
 
-### ✅ 12. API Adafruit BME280 vecchia
-Ora si importa `from adafruit_bme280 import basic` e si usa `board.I2C()`, come nell'[esempio ufficiale](https://github.com/adafruit/Adafruit_CircuitPython_BME280/blob/main/examples/bme280_simpletest.py) (versione ≥ 2.6).
+### ✅ 12. API Adafruit CircuitPython BME280 obsoleta
+Superato: il BME280 è collegato solo all'ESP32; il lettore Python del Pi è stato rimosso e il firmware usa la libreria Adafruit BME280 per Arduino.
 
 ### ✅ 13. Indirizzo BME280 incoerente
-Il default è ora `0x76` sia in `bme_reader.py` sia in `sensors.py`, come nello schema in `hardware/sensors/BME280/` (SDO a GND).
+Il driver ESP32 usa l'indirizzo predefinito `0x76`, come nello schema in `hardware/sensors/BME280/` (SDO a GND).
 
 ### ✅ 14. Il backend SMBus non leggeva le misure e non chiudeva il bus
-Il backend SMBus ora usa [RPi.bme280](https://github.com/rm-hull/bme280), che applica la compensazione del datasheet. Il bus si chiude con `with`. `sensors.py` non ha più una sua copia del codice, ma usa `bme_reader`.
+Superato: non esiste più un backend SMBus sul Pi; il BME280 è gestito dal firmware ESP32.
 
 ### ✅ 15. Porta seriale non chiusa in caso di eccezione
 `gps_reader.py` ora usa `with serial.Serial(...) as ser:`.
@@ -129,7 +129,7 @@ Il backend SMBus ora usa [RPi.bme280](https://github.com/rm-hull/bme280), che ap
 
 ### ◐ 17. Codice morto e chiavi di configurazione che non corrispondono
 - ✅ Il commento della chiave `library` dell'acqua ora indica `rpigpio`, il valore che il dispatcher riconosce davvero.
-- ✅ In `bme_reader`, chiedere un backend non installato ora dà errore invece di restituire in silenzio il dummy.
+- ✅ Rimosso il vecchio lettore Python BME280: il sensore appartiene al firmware ESP32.
 - ⏳ `read_soil_moisture_gpio()` e `read_methane_gpio()` non vengono mai chiamate.
 - ⏳ `wet_bool` / `alarm_bool` non hanno una colonna nel CSV e vengono scartati.
 

@@ -37,7 +37,11 @@ Due cose da sapere:
 
 ### `platformio.ini`
 
-Board `esp32cam`, framework Arduino, monitor a 115200 baud. Sarà necessario modificare i PIN
+Board `esp32cam`, framework Arduino, monitor a 115200 baud e dipendenza Adafruit BME280. Per compilare e caricare il firmware si usa `pio run` e `pio run -t upload` dalla cartella `firmware/esp32/`; la guida [`setup-risveglio.md`](setup-risveglio.md) spiega la porta seriale e il bootloader.
+
+### `src/bme_reader.h` e `src/bme_reader.cpp`
+
+Driver del BME280 collegato all'ESP32. Usa la libreria Adafruit BME280 per Arduino, scaricata da PlatformIO in base a `lib_deps` in `platformio.ini`. `beginBme280(sda, scl, address)` inizializza il bus I²C e il sensore; `readBme280(...)` restituisce valori compensati in °C, percentuale e hPa. Il driver non è ancora chiamato da `main.cpp`: i pin I²C vanno stabiliti sulla scheda definitiva, perché sulla ESP32-CAM GPIO21 e GPIO22 sono impegnati dalla camera.
 
 ### `include/secrets.h.example`
 
@@ -55,7 +59,6 @@ raspberry_pi/
 │   ├── capture_client.py   scatto delle foto
 │   ├── sensors.py          lettura dei sensori → CSV
 │   ├── gps_reader.py       GPS (NMEA)
-│   ├── bme_reader.py       BME280 collegato al Pi (solo banco)
 │   └── photo_metadata.py   JSON accanto alle foto
 ├── systemd/
 │   ├── insect-capture.service
@@ -96,7 +99,7 @@ Con `--oneshot` fa una foto ed esce, senza questa opzione scatta in ciclo ogni `
 
 `sensors.py` legge **una volta** tutti i sensori abilitati, uno dopo l'altro, e aggiunge una riga a `raspberry_pi/data/sensors.csv`. Tutta la configurazione sta nel dizionario `SENSORS` all'inizio del file: per ogni sensore si può abilitarlo o disabilitarlo e scegliere quale implementazione usare (ad esempio gpiozero o RPi.GPIO, oppure `dummy` per provare senza hardware).
 
-- GPS e BME280 sono letti con i moduli `gps_reader` e `bme_reader`;
+- il GPS è letto con il modulo `gps_reader`; il BME280 è collegato all'ESP32 e non è letto da questo script;
 - suolo e metano passano dall'ADC MCP3008, letto con la classe `MCP3008` di gpiozero.
 
 Cose da tenere a mente:
@@ -113,9 +116,9 @@ Il CSV contiene per ora solo l'intestazione e una riga di prova. Più avanti ci 
 
 Apre la seriale e aspetta una frase GGA con un fix valido. Il parsing lo fa la libreria **pynmea2**, che controlla il checksum e accetta sia `$GPGGA` sia `$GNGGA`. Le frasi con qualità del fix 0 vengono scartate. Restituisce posizione, quota, satelliti, qualità del fix e HDOP.
 
-### `smartcam/bme_reader.py`
+### Driver BME280 dell'ESP32
 
-Legge un BME280 collegato direttamente al Pi, **solo per le prove al banco**. Ha due backend, entrambi con misure compensate: la libreria Adafruit oppure RPi.bme280 (più leggera, basata su smbus2). L'indirizzo di default è `0x76`, come nel nostro schema.
+Il vecchio modulo Python per leggere il BME280 sul Pi è stato rimosso: il sensore di progetto è collegato soltanto all'ESP32. Il driver attuale è `firmware/esp32/src/bme_reader.cpp`.
 
 ### `smartcam/photo_metadata.py`
 
@@ -138,8 +141,7 @@ All'inizio di ogni file c'è una sezione **"Provenienza"** che distingue le part
 | Parte | Fonte |
 |---|---|
 | Pin e configurazione della camera in `main.cpp` | esempio *CameraWebServer* di Espressif (`camera_pins.h`, `CameraWebServer.ino`), Apache-2.0 |
-| Lettura BME280 con Adafruit (`bme_reader.py`) | esempio `bme280_simpletest.py` di Adafruit, MIT |
-| Lettura BME280 con SMBus (`bme_reader.py`) | libreria e README di [RPi.bme280](https://github.com/rm-hull/bme280), MIT |
+| Lettura BME280 sul firmware ESP32 (`bme_reader.cpp`) | libreria [Adafruit BME280 per Arduino](https://github.com/adafruit/Adafruit_BME280_Library), MIT |
 | Parsing NMEA (`gps_reader.py`) | libreria [pynmea2](https://github.com/Knio/pynmea2), MIT |
 | Lettura MCP3008 (`sensors.py`) | classe `MCP3008` di [gpiozero](https://gpiozero.readthedocs.io/en/stable/api_spi.html), BSD |
 | Ingressi digitali (`sensors.py`) | documentazione gpiozero e RPi.GPIO |
@@ -155,12 +157,10 @@ Abbiamo controllato, script per script, se una libreria o un esempio ufficiale p
 |---|---|---|
 | `gps_reader.py` | parser NMEA scritto a mano | **sostituito** con pynmea2: aggiunge controllo del checksum, `$GNGGA` e qualità del fix |
 | `sensors.py` | copia della lettura GPS | **sostituita** con `gps_reader` |
-| `sensors.py` | copia della lettura BME280 | **sostituita** con `bme_reader` |
 | `sensors.py` | MCP3008 via Adafruit (chip select errato) e via spidev a mano | **sostituiti** con `gpiozero.MCP3008` |
-| `bme_reader.py` | backend SMBus che leggeva solo il chip ID | **sostituito** con RPi.bme280, che restituisce misure compensate |
 | `capture_client.py` | chiamata a `rpicam-still` con `subprocess` | **non sostituita**: [Picamera2](https://github.com/raspberrypi/picamera2) sarebbe l'alternativa ufficiale, ma richiede di riscrivere lo scatto e provarlo sulla camera vera ([issues.md #28](../issues.md)) |
 | `photo_metadata.py` | JSON sidecar | **tenuto**: è codice minimo basato sulla libreria standard |
 | `capture_rpi.sh`, unità systemd | | niente da sostituire |
-| `main.cpp` | logica WAKE/ALIVE | niente da sostituire. Per il BME280 sull'ESP useremo la libreria [Adafruit_BME280](https://github.com/adafruit/Adafruit_BME280_Library) invece di scrivere un driver |
+| `main.cpp` | logica WAKE/ALIVE | niente da sostituire; il driver BME280 è separato in `bme_reader.cpp` e usa Adafruit BME280 per Arduino |
 
 **Regola per il futuro:** quando copiamo o adattiamo codice da internet, aggiungiamo subito nel file un commento con l'URL, l'autore o il progetto, la licenza e cosa abbiamo modificato.

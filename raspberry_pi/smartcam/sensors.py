@@ -22,9 +22,8 @@ Si lancia come modulo, dalla cartella raspberry_pi/::
 # Provenienza:
 # - Il dizionario di configurazione, il meccanismo di scelta delle alternative
 #   (read_sensor_with_fallback) e la scrittura del CSV sono scritti da noi.
-# - BME280 e GPS sono letti con i moduli bme_reader.py e gps_reader.py di
-#   questo package (lì sono indicate le rispettive fonti: Adafruit, RPi.bme280,
-#   pynmea2). Prima qui c'erano delle copie semplificate dello stesso codice.
+# - Il GPS è letto con gps_reader.py di questo package (fonte: pynmea2).
+#   Il BME280 è collegato all'ESP32 e non viene letto da questo script.
 # - read_adc() usa la classe MCP3008 di gpiozero (licenza BSD), preinstallata
 #   su Raspberry Pi OS: https://gpiozero.readthedocs.io/en/stable/api_spi.html#mcp3008
 #   Sostituisce due versioni precedenti: una adattata dall'esempio Adafruit
@@ -40,7 +39,6 @@ import os
 import sys
 from datetime import datetime, timezone
 
-from .bme_reader import get_bme280_reading
 from .gps_reader import get_gps_fix
 
 # ---------------------------------------------------------------------------
@@ -49,15 +47,6 @@ from .gps_reader import get_gps_fix
 # I pin qui sotto sono esempi: NON sono il cablaggio di campo verificato.
 # ---------------------------------------------------------------------------
 SENSORS = {
-    # BME280: in campo sta solo sull'ESP (plan.pdf). Abilitarlo qui solo per
-    # prove al banco con un BME collegato temporaneamente al Pi. In produzione
-    # resta disabilitato e le colonne andranno riempite con i dati dell'ESP.
-    "bme280": {
-        "enabled": False,
-        "bus": 1,
-        "address": 0x76,          # 0x76 con SDO a GND (nostro schema), 0x77 con SDO a 3,3 V
-        "library": "dummy",       # adafruit | smbus | auto | dummy | (in futuro: esp)
-    },
     # GPS: frasi NMEA sulla seriale (UART)
     "gps": {
         "enabled": True,
@@ -155,24 +144,6 @@ def append_row(row: dict) -> None:
 # ---------------------------------------------------------------------------
 # Lettura dei sensori: per ognuno la versione principale e le alternative
 # ---------------------------------------------------------------------------
-
-def read_bme280() -> dict:
-    """Legge il BME280 tramite bme_reader (solo prove al banco sul Pi).
-
-    Solleva un'eccezione se la lettura fallisce, così il dispatcher la
-    registra come errore.
-    """
-    cfg = SENSORS["bme280"]
-    reading = get_bme280_reading(cfg["bus"], cfg["address"], cfg["library"])
-    if reading is None:
-        raise RuntimeError("BME280 read failed (see log)")
-    return reading
-
-
-def read_bme280_dummy() -> dict:
-    """Dummy del BME280: tutti i campi a None, per provare senza hardware."""
-    return {"temperature": None, "humidity": None, "pressure": None}
-
 
 def read_gps() -> dict:
     """Legge una posizione tramite gps_reader.
@@ -375,7 +346,6 @@ def main() -> int:
 
     # Ogni voce: nome del sensore, funzione principale, alternative.
     readers = [
-        ("bme280", read_bme280, {"dummy": read_bme280_dummy}),
         ("gps", read_gps, {"dummy": read_gps_dummy}),
         ("water", read_water, {"rpigpio": read_water_rpigpio, "dummy": read_water_dummy}),
         ("soil_moisture", read_soil_moisture, {"dummy": read_soil_moisture_dummy}),
@@ -392,10 +362,8 @@ def main() -> int:
     # vuoti; il timestamp è quello della riga, non delle singole misure.
     row = {"timestamp_iso": now_iso(), "sensors_ok": ",".join(ok_list), "sensors_failed": ",".join(fail_list)}
 
-    b = results.get("bme280", {})
-    row["bme280_temperature_c"] = b.get("temperature")
-    row["bme280_humidity_pct"] = b.get("humidity")
-    row["bme280_pressure_hpa"] = b.get("pressure")
+    # Le colonne BME280 restano nello schema CSV per i dati che saranno
+    # trasferiti dall'ESP32; sensors.py non accede al sensore sul Pi.
 
     g = results.get("gps", {})
     row["gps_latitude"] = g.get("latitude")
