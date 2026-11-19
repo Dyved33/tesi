@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "78d9851142b716b7",
+        "id": "f2d92a385958cf71",
         "type": "tabs",
         "children": [
           {
-            "id": "ccccd1079b0feeda",
+            "id": "784215eb49f123eb",
             "type": "leaf",
             "state": {
               "type": "empty",
@@ -185,11 +185,11 @@
       "bases:Create new base": false
     }
   },
-  "active": "ccccd1079b0feeda",
+  "active": "784215eb49f123eb",
   "lastOpenFiles": [
-    "docs/setup-risveglio.md",
-    "issues.md",
     "more.md",
+    "issues.md",
+    "docs/setup-risveglio.md",
     "docs/guida-codice.md",
     "README.md"
   ]

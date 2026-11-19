@@ -124,34 +124,63 @@ Il firmware non manda l'impulso se ALIVE è già alto. Questo però si basa solo
 
 ## 4. Prove al banco
 
-Conviene procedere un pezzo alla volta e annotare ogni volta scheda, pin, alimentazione, misure e risultato:
+Procedi nell'ordine e passa alla fase successiva solo quando il risultato atteso è confermato. **Scollega l'alimentazione prima di cambiare i collegamenti**; non collegare GPIO17 al GPIO13 finché la misura ALIVE indicata sotto non è stata fatta. Se una misura o un comportamento non corrisponde a quanto atteso, fermati e controlla schema, pin e configurazione prima di alimentare il circuito successivo.
 
-1. Pi da solo: boot, spegnimento, impostazioni EEPROM.
-2. ESP e BME alimentati in modo indipendente dal Pi: devono restare accesi con il Pi in halt.
-3. BME280 sull'ESP (quando ci sarà il firmware): indirizzo e valori plausibili.
-4. ALIVE: misurare il GPIO17 a Pi acceso e in halt, **prima** di collegarlo all'ESP.
-5. Circuito PC817 da solo, senza collegarlo al Pi: controllare con il multimetro che chiuda il contatto.
-6. Comando `w` con il Pi acceso: siccome ALIVE è alto, l'impulso non deve partire.
-7. Wake da halt: forma e durata dell'impulso, boot del Pi, ALIVE che sale.
-8. Camera dell'ESP: solo che acquisisca i frame (il rilevamento non esiste ancora).
-9. Quando ci sarà il rilevamento: casi positivi e negativi, cooldown, comportamento con Pi acceso e in halt.
-10. Solo alla fine abilitare il servizio di scatto, dopo aver verificato che foto e spegnimento funzionino.
+Annota per ogni prova scheda/revisione, pin, alimentazione, misura e risultato. In particolare, non dare per scontata la massa o la polarità dei pad: verifica sul Pi reale.
 
-Sì: `platformio.ini` configura compilazione e dipendenze, mentre il caricamento si esegue con il target `upload`. Installare PlatformIO Core (`pio`) oppure l'estensione PlatformIO IDE, collegare la scheda via USB e aprire un terminale nella root del repository. Poi entrare nella cartella del progetto firmware ed eseguire:
+### A. Verifica separata delle schede
+
+1. **Pi da solo.** Avvia e arresta il Pi; verifica la configurazione EEPROM effettiva e che il pulsante di accensione lo riavvii dall'halt. Non collegare ancora ESP o circuito WAKE.
+2. **ESP da sola: compilazione e caricamento del firmware.** Per queste operazioni lascia la ESP32-CAM scollegata dal Pi e collega via USB solo il convertitore USB-seriale della scheda. Chiudi eventuali altri programmi che stanno usando la stessa porta seriale.
+
+   Puoi usare PlatformIO in uno di questi due modi:
+
+   - **Visual Studio Code:** installa l'estensione *PlatformIO IDE*, apri in VS Code la cartella `firmware/esp32` (quella che contiene `platformio.ini`) e attendi che PlatformIO installi la piattaforma ESP32 e le librerie. Nella barra di PlatformIO seleziona l'ambiente `esp32cam`; usa **Build** per compilare e **Upload** per scrivere il firmware nella memoria flash della scheda. Il terminale integrato è un'alternativa ai pulsanti dell'interfaccia.
+   - **Terminale:** installa PlatformIO Core, che fornisce il comando `pio`, apri un terminale nella root del repository e usa:
 
 ```bash
-cd firmware/esp32
-pio run                                      # compila e scarica le librerie dichiarate
-pio run -t upload                           # compila, poi carica sulla scheda
-pio device monitor                          # monitor seriale a 115200 baud
-# Se PlatformIO non trova la porta USB, indicarla esplicitamente, per esempio:
+cd firmware/esp32                            # entra nella cartella con platformio.ini
+pio run                                      # compila e installa le dipendenze necessarie
+pio run -t upload                            # compila e carica il firmware nella ESP32
+```
+
+`pio run` controlla il codice e produce il firmware; `pio run -t upload` lo trasferisce nella memoria flash della scheda. Il file generato si trova in `.pio/build/esp32cam/firmware.bin`, ma normalmente non occorre selezionarlo o copiarlo: è PlatformIO a caricarlo. Attendi il messaggio di caricamento completato prima di scollegare la USB.
+
+Se PlatformIO non trova la porta, individua quella assegnata dal sistema e specificala esplicitamente. È spesso `/dev/ttyUSB0` o `/dev/ttyACM0` su Linux, `COM3` (o un altro `COM`) su Windows e `/dev/cu.usbserial-...` su macOS:
+
+```bash
 pio run -t upload --upload-port /dev/ttyUSB0
+```
+
+Sostituisci l'esempio con la porta effettiva. Per il primo caricamento, o se l'upload si blocca su "Connecting", questa ESP32-CAM potrebbe richiedere la modalità bootloader: collega GPIO0 a GND, premi e rilascia RESET (o togli e ridai alimentazione), avvia l'upload e, quando inizia il trasferimento, rilascia GPIO0 da GND. Se il convertitore ha pulsanti `BOOT` e `RST/RESET`, in genere si ottiene lo stesso risultato tenendo premuto `BOOT`, premendo e rilasciando `RST`, poi rilasciando `BOOT` quando parte il caricamento. La sequenza può dipendere dal convertitore. A upload concluso, **rimuovi ogni collegamento GPIO0-GND e riavvia**.
+
+3. **Apri il monitor seriale.** Dopo l'upload, avvia il monitor a 115200 baud per vedere i messaggi del firmware:
+
+```bash
+pio device monitor
+# Se necessario, indica anche qui la porta:
 pio device monitor --port /dev/ttyUSB0
 ```
 
-Su Windows la porta è tipicamente `COM3` (sostituire con quella mostrata dal sistema); su macOS `/dev/cu.usbserial-...`. La porta dipende dal convertitore USB della scheda. Per il primo caricamento della ESP32-CAM può essere necessario mettere la scheda in modalità bootloader (GPIO0 a GND durante il reset), poi rimuovere il ponticello e riavviare.
+Con l'estensione VS Code puoi usare l'azione **Monitor** di PlatformIO, impostata a 115200 baud (`monitor_speed` è già configurato in `platformio.ini`). Per chiudere il monitor da terminale, premi `Ctrl+C`; la porta deve essere libera per fare un nuovo upload.
 
-Nel monitor, scrivere `w` e premere Invio prova il percorso di wake a mano.
+Il comando seriale `w` seguito da Invio richiede immediatamente un wake. Provalo solo dopo avere completato le verifiche elettriche e collegato correttamente il circuito: se ALIVE risulta basso, il firmware aziona WAKE. Con Pi acceso e ALIVE alto, il log deve invece mostrare che l'impulso viene saltato.
+
+La ESP32-CAM corrente non usa ancora il BME280; il rilevamento automatico è uno stub e non genera wake. Quando firmware e pin I²C saranno pronti, prova il BME alimentando ESP e sensore senza il Pi e controlla che indirizzo e valori siano plausibili. Non usare GPIO21/22 per il BME su questa ESP32-CAM: sono usati dalla camera.
+
+### B. Prove separate, ESP non collegata al Pi
+
+4. **Alimentazione indipendente.** Verifica che ESP (e BME, quando integrato) restino alimentati mentre il Pi è in halt. Il Pi può spegnere le proprie uscite in questa condizione: non alimentare l'ESP dal GPIO del Pi.
+5. **Misura ALIVE sul solo Pi.** Con il Pi acceso, misura GPIO17 rispetto a GND e annota il valore. Ripeti dopo `sudo halt`, lasciando collegata l'alimentazione, e annota anche quel valore. Il GPIO si configura alto durante il boot, ma non assumere che mantenga quel livello in halt. Se misuri tensione inattesa o instabile, non collegarlo all'ESP: ricontrolla configurazione e cablaggio. Solo dopo questa verifica prepara il collegamento GPIO17→GPIO13 con pulldown da 10 kΩ e massa comune, a schede spente.
+6. **Prova isolatore scollegato dal Pi.** Alimenta il lato LED con una sorgente da banco a bassa tensione e corrente limitata, rispettando la resistenza da 330 Ω; verifica che il transistor del PC817 commuti e che torni aperto quando togli il comando. Misura la commutazione in tensione: non usare la modalità continuità/resistenza su un circuito alimentato. Identifica con il multimetro, a Pi spento, quale pad J2 è GND. Non collegare ancora i fili a J2.
+
+### C. Prova integrata
+
+7. Collega l'uscita isolata del PC817 ai pad J2 identificati, poi collega ALIVE già verificato. Mantieni l'ESP alimentato indipendentemente. Controlla a vista che non ci siano corti o fili scambiati prima di riaccendere.
+8. Con il Pi **acceso**, apri il monitor seriale e invia `w` seguito da Invio. Il log deve indicare `ALIVE HIGH` e non deve esserci impulso su WAKE. Se il log indica `ALIVE LOW`, interrompi la prova e ricontrolla il segnale prima di lasciare che l'ESP chiuda J2.
+9. Metti il Pi in halt lasciando alimentata l'ESP e invia `w`. Verifica il singolo impulso breve (200 ms), l'avvio del Pi e il passaggio di ALIVE al livello misurato durante il boot. Se il Pi non si avvia o ALIVE non cambia come previsto, interrompi e ricontrolla; non ripetere impulsi alla cieca. ALIVE segnala solo il livello GPIO, non che Linux abbia completato l'avvio.
+10. Verifica che la camera ESP acquisisca frame. Questa prova non verifica il rilevamento: al momento `eventDetected()` restituisce sempre `false`. Quando il rilevamento sarà implementato, prova casi positivi e negativi, cooldown e comportamento con Pi acceso e in halt.
+11. **Solo dopo il collaudo del ciclo completo**, abilita il servizio di scatto di §1 e verifica una foto, la lettura sensori e lo spegnimento previsto. Non abilitarlo durante prove o raccolta continua: spegne il Pi a ogni avvio.
 
 ---
 
