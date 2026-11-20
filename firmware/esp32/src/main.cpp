@@ -1,37 +1,64 @@
 /**
- * Firmware per ESP32-CAM (AI-Thinker): risveglio del Raspberry Pi 5.
+ * Firmware della ESP32-CAM (pinout AI-Thinker): risveglio del Raspberry Pi 5
+ * quando la camera vede un evento, risveglio manuale per le prove e misure
+ * del BME280 da mandare al Pi.
  *
  * Cosa fa:
- * - inizializza la camera della ESP32-CAM e a ogni giro acquisisce un frame,
- *   ma eventDetected() è ancora uno stub e restituisce sempre false: niente
- *   wake automatici;
- * - se dal monitor seriale si invia 'w', prova a svegliare il Pi;
- * - per svegliarlo dà un impulso su WAKE (GPIO14) e poi aspetta che il Pi
- *   alzi ALIVE (GPIO13).
- * Il driver BME280 è in bme_reader.cpp, ma non viene inizializzato qui:
- * sulla ESP32-CAM i pin indicati nello schema I2C sono usati dalla camera.
- * Mancano ancora integrazione del sensore, forecaster e decider: l'obiettivo finale
- * è un ESP sempre acceso che legge il BME280 e decide quando svegliare il Pi.
+ * - a ogni giro acquisisce un frame dalla camera e chiede a eventDetected()
+ *   se è successo qualcosa (ad esempio un insetto che passa davanti alla
+ *   camera); se sì sveglia il Pi. Il rilevamento è ancora uno stub che
+ *   restituisce sempre false: niente wake automatici;
+ * - dal monitor seriale USB: 'w' sveglia il Pi a mano, 'r' fa una misura del
+ *   BME280 e la stampa;
+ * - per svegliare il Pi dà un impulso su WAKE e aspetta che il Pi alzi ALIVE;
+ * - quando ALIVE sale (il Pi si sta accendendo, per qualsiasi motivo) fa
+ *   subito una misura del BME280, aspetta PI_BOOT_DELAY_MS perché il Pi
+ *   finisca il boot e gliela manda via UART. Poi, finché il Pi resta acceso,
+ *   gli manda una misura ogni BME_PERIOD_MS.
+ * Se la camera o il BME280 non partono, il resto del firmware continua a
+ * funzionare.
  *
- * Collegamenti (schema in hardware/pi5->esp32/ nella root del repository):
- *   WAKE:  GPIO14 -> resistenza 330 Ω -> LED dell'optoisolatore PC817; il
- *          transistor del PC817 chiude i due pad J2 del Pi, come se si
- *          premesse il pulsante di accensione.
- *   ALIVE: GPIO17 del Pi -> GPIO13 dell'ESP, con pulldown da 10 kΩ verso massa
- *          e massa in comune. HIGH = il GPIO17 del Pi è alto. Non distingue
- *          "acceso e operativo" da "in fase di spegnimento".
+ * Collegamenti (tabella completa e motivazioni in docs/setup-risveglio.md).
+ * La ESP32-CAM non va modificata: si usano solo pin già disponibili sui
+ * connettori laterali, che vanno alla board di collegamento con il Pi.
+ *   WAKE:   GPIO12 -> 330 Ω -> LED dell'optoisolatore PC817; il transistor
+ *           del PC817 chiude i due pad J2 del Pi, come se si premesse il
+ *           pulsante di accensione.
+ *   ALIVE:  GPIO17 del Pi -> GPIO2 dell'ESP, con pulldown da 10 kΩ verso
+ *           massa e massa in comune. HIGH = il GPIO17 del Pi è alto. Non
+ *           distingue "acceso e operativo" da "in fase di spegnimento".
+ *   UART:   GPIO14 dell'ESP (TX) -> 1 kΩ -> GPIO15 del Pi (RXD, pin 10).
+ *           Solo in direzione ESP -> Pi: non avanzano pin per la RX.
+ *   BME280: SDA -> GPIO13, SCL -> GPIO15, indirizzo 0x76.
+ * Due di questi pin hanno vincoli all'avvio (pin di strapping):
+ *   GPIO12 deve essere basso al reset, altrimenti l'ESP imposta la flash a
+ *          1,8 V e non parte: per questo ci va WAKE, che il LED del PC817
+ *          verso massa tiene basso;
+ *   GPIO2  deve essere basso per caricare il firmware: con il Pi spento
+ *          ALIVE è basso, quindi l'upload va fatto a Pi spento o con la
+ *          board di collegamento staccata.
+ * I pin usati sono quelli dello slot microSD: la microSD non va inserita.
  *
- * Con POWER_OFF_ON_HALT=1 il Pi in halt spegne il suo 3,3 V: ESP e BME280
- * vanno quindi alimentati per conto loro. L'impulso è breve apposta, per
- * simulare un "click" sul pulsante e non una pressione prolungata.
+ * Con POWER_OFF_ON_HALT=1 il Pi in halt spegne il suo 3,3 V: l'ESP va quindi
+ * alimentato per conto suo. Per lo stesso motivo la UART verso il Pi resta
+ * chiusa (TX in alta impedenza) finché ALIVE è basso: una linea TX a riposo è
+ * alta e alimenterebbe il Pi spento attraverso il suo RXD.
  *
- * La camera della ESP32-CAM qui serve solo per un eventuale rilevamento
- * provvisorio: nessuna immagine viene inviata al Pi. Le foto "vere" le fanno
- * le fotocamere collegate al Raspberry.
+ * Formato delle righe mandate al Pi (115200 8N1, terminate da '\n'):
+ *   BME,<seq>,<tipo>,<age_ms>,<temp_C>,<rh_%>,<press_hPa>
+ *   <seq>    cresce di 1 a ogni misura e riparte da 1 a ogni reset dell'ESP;
+ *   <tipo>   W = misura fatta al risveglio del Pi, P = misura periodica;
+ *   <age_ms> quanti millisecondi fa è stata fatta la misura. L'ESP non ha un
+ *            orologio vero: il Pi ricava l'ora della misura come
+ *            (ora di ricezione - age_ms).
+ *
+ * La camera della ESP32-CAM serve solo al rilevamento: nessuna immagine viene
+ * inviata al Pi. Le foto "vere" le fanno le fotocamere collegate al Raspberry.
  *
  * Provenienza:
  * - La logica WAKE/ALIVE (piAlive, pulseJ2, waitForAlive, ensurePiOn,
- *   onEvent, comando 'w') è scritta da noi.
+ *   onEvent, comando 'w'), l'invio delle misure al Pi e la gestione della
+ *   UART sono scritti da noi.
  * - I #define dei pin della camera sono quelli del modello CAMERA_MODEL_AI_THINKER
  *   nel file camera_pins.h dell'esempio CameraWebServer di Espressif (Apache-2.0):
  *   https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h
@@ -39,14 +66,30 @@
  *   xclk a 20 MHz, JPEG, scelta di frame_size/fb_count in base alla PSRAM,
  *   esp_camera_init) è adattato da CameraWebServer.ino dello stesso esempio:
  *   https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/Camera/CameraWebServer/CameraWebServer.ino
- * - L'uso di esp_camera_fb_get()/esp_camera_fb_return() segue il README del
- *   driver esp32-camera: https://github.com/espressif/esp32-camera
+ * - L'uso di esp_camera_fb_get()/esp_camera_fb_return() e di sccb_i2c_port
+ *   seguono il README e esp_camera.h del driver esp32-camera:
+ *   https://github.com/espressif/esp32-camera
+ * - L'inizializzazione del BME280 e la misura in forced mode (beginI2C,
+ *   setMode(MODE_FORCED), attesa di isMeasuring(), lettura) seguono gli
+ *   esempi Example2_I2CAddress e Example6_LowPower della libreria SparkFun
+ *   BME280 (licenza MIT): https://github.com/sparkfun/SparkFun_BME280_Arduino_Library
+ *   Rispetto all'esempio abbiamo aggiunto un timeout all'attesa. Oversampling
+ *   x1 e filtro spento sono la configurazione consigliata dal datasheet Bosch
+ *   per il monitoraggio meteo (sezione 3.5.1).
+ *   Non usiamo la libreria Adafruit BME280 perché la sua dipendenza
+ *   Adafruit Unified Sensor definisce un tipo sensor_t che va in conflitto
+ *   con quello del driver della camera (il firmware non compila).
+ * - Serial2.begin(baud, config, rx, tx) per scegliere i pin della UART è
+ *   l'API di HardwareSerial di arduino-esp32; rx = -1 vuol dire "nessun pin
+ *   RX": https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/HardwareSerial.cpp
  * - Il confronto "millis() - t0 < timeout" per gestire il riavvolgimento di
  *   millis() è l'idioma standard Arduino (vedi l'esempio BlinkWithoutDelay:
  *   https://docs.arduino.cc/built-in-examples/digital/BlinkWithoutDelay/).
  */
 
 #include <Arduino.h>
+#include <Wire.h>
+#include <SparkFunBME280.h>
 #include "esp_camera.h"
 
 // Pin della camera integrata sulla ESP32-CAM AI-Thinker.
@@ -55,14 +98,14 @@
 #define PWDN_GPIO_NUM     32   // power-down della camera
 #define RESET_GPIO_NUM    -1   // reset non collegato
 #define XCLK_GPIO_NUM      0   // clock che l'ESP32 fornisce al sensore
-#define SIOD_GPIO_NUM     26   // SIOD/SIOC: bus di configurazione (tipo I2C)
-#define SIOC_GPIO_NUM     27
+#define SIOD_GPIO_NUM     26   // SIOD/SIOC: bus I2C di configurazione
+#define SIOC_GPIO_NUM     27   // della camera
 // Y2...Y9: gli 8 bit del bus parallelo su cui arrivano i pixel.
 #define Y9_GPIO_NUM       35
 #define Y8_GPIO_NUM       34
 #define Y7_GPIO_NUM       39
 #define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21   // per questo GPIO21 non è libero per l'I2C del BME280
+#define Y5_GPIO_NUM       21
 #define Y4_GPIO_NUM       19
 #define Y3_GPIO_NUM       18
 #define Y2_GPIO_NUM        5
@@ -71,9 +114,35 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-// Pin verso il Raspberry (vedi intestazione).
-constexpr int PIN_WAKE = 14;
-constexpr int PIN_ALIVE = 13;
+// Pin verso la board di collegamento con il Raspberry (vedi intestazione).
+constexpr int PIN_WAKE = 12;
+constexpr int PIN_ALIVE = 2;
+constexpr int PIN_PI_TX = 14;  // TX dell'ESP -> RXD del Pi (GPIO15)
+
+// Bus I2C del BME280 (Wire, porta I2C 0). La camera usa l'altra porta
+// I2C dell'ESP32 (la 1) sui suoi pin SIOD/SIOC.
+constexpr int PIN_I2C_SDA = 13;
+constexpr int PIN_I2C_SCL = 15;
+constexpr int CAMERA_I2C_PORT = 1;
+// 0x76 con SDO a massa, come nel nostro schema (0x77 con SDO a 3,3 V).
+constexpr uint8_t BME_ADDRESS = 0x76;
+// 100 kHz è la velocità standard dell'I2C. Con il cavo lungo verso la
+// custodia esterna, se le letture falliscono, provare ad abbassarla.
+constexpr uint32_t I2C_FREQ_HZ = 100000;
+// Se il BME280 non risponde, ogni quanto riprovare a inizializzarlo.
+constexpr uint32_t BME_RETRY_MS = 10000;
+// Con oversampling x1 una misura dura meno di 10 ms (datasheet Bosch,
+// appendice B): se dopo 100 ms non ha finito, il sensore non risponde.
+constexpr uint32_t BME_MEASURE_TIMEOUT_MS = 100;
+
+constexpr uint32_t PI_UART_BAUD = 115200;
+// Dopo che ALIVE sale, quanto aspettare prima di mandare la misura del
+// risveglio: il programma sul Pi che la riceve deve essere già partito.
+// Va tarato sul tempo di boot reale del Pi.
+constexpr uint32_t PI_BOOT_DELAY_MS = 60000;
+// Con il Pi acceso, una misura al minuto (come propone il piano).
+// 0 = mandare solo la misura del risveglio.
+constexpr uint32_t BME_PERIOD_MS = 60000;
 
 // Durata dell'impulso su WAKE: simula un "click" breve sul pulsante.
 constexpr uint32_t WAKE_PULSE_MS = 200;
@@ -82,10 +151,40 @@ constexpr uint32_t ALIVE_WAIT_MS = 15000;
 // Tempo minimo tra due eventi gestiti, per non bombardare il Pi di impulsi.
 constexpr uint32_t EVENT_COOLDOWN_MS = 30000;
 
+// Una misura del BME280. ms è il millis() del momento della misura.
+struct Reading {
+  uint32_t seq;
+  uint32_t ms;
+  float temperature;  // °C
+  float humidity;     // % UR
+  float pressure;     // hPa
+};
+
+static bool cameraReady = false;
+
+static BME280 bme;
+static bool bmeReady = false;
+static uint32_t lastBmeInitMs = 0;
+static bool hasBmeInitAttempt = false;
+static uint32_t nextSeq = 1;
+
+// Stato del collegamento con il Pi (vedi servicePiLink()).
+static HardwareSerial& piSerial = Serial2;
+static bool piLinkOpen = false;
+static uint32_t aliveSinceMs = 0;      // quando ALIVE è salito
+static bool wakeReadingValid = false;  // abbiamo la misura del risveglio
+static bool wakeReadingSent = false;   // l'abbiamo già mandata
+static Reading wakeReading;
+static uint32_t lastPeriodicMs = 0;
+
 // Quando abbiamo gestito l'ultimo evento. Il flag serve per accettare
 // subito il primo evento dopo l'accensione, senza aspettare il cooldown.
 static uint32_t lastEventMs = 0;
 static bool hasHandledEvent = false;
+
+// ---------------------------------------------------------------------------
+// Risveglio del Pi (WAKE / ALIVE)
+// ---------------------------------------------------------------------------
 
 // true se il GPIO17 del Pi è alto. Lettura secca, senza filtri o debounce.
 bool piAlive() {
@@ -93,7 +192,7 @@ bool piAlive() {
 }
 
 // Impulso su WAKE: il PC817 chiude i pad J2 per WAKE_PULSE_MS millisecondi.
-// GPIO14 non va mai collegato direttamente ai pad J2.
+// GPIO12 non va mai collegato direttamente ai pad J2.
 void pulseJ2() {
   digitalWrite(PIN_WAKE, HIGH);
   delay(WAKE_PULSE_MS);
@@ -140,9 +239,31 @@ bool ensurePiOn() {
   return true;
 }
 
-// Inizializza la camera. Adattato da CameraWebServer.ino (github)
+// Gestisce un evento (automatico o manuale) rispettando il cooldown.
+void onEvent() {
+  const uint32_t now = millis();  // millisecondi dall'accensione dell'ESP
+  if (hasHandledEvent && now - lastEventMs < EVENT_COOLDOWN_MS) {
+    Serial.println("Event ignored (cooldown)");
+    return;
+  }
+  // Il cooldown parte da adesso, anche se poi il wake non riesce.
+  lastEventMs = now;
+  hasHandledEvent = true;
+
+  Serial.println("Event: ensuring Pi is on");
+  if (!ensurePiOn()) {
+    Serial.println("Event: wake failed");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Camera e rilevamento
+// ---------------------------------------------------------------------------
+
+// Inizializza la camera. Adattato da CameraWebServer.ino di Espressif.
 bool initCamera() {
-  camera_config_t config;
+  // = {} azzera i campi che non assegniamo (issues.md #24).
+  camera_config_t config = {};
   // Canale e timer LEDC: il driver li usa per generare il clock XCLK.
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -159,8 +280,10 @@ bool initCamera() {
   config.pin_pclk = PCLK_GPIO_NUM;
   config.pin_vsync = VSYNC_GPIO_NUM;
   config.pin_href = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  // La porta I2C 0 è già di Wire (BME280): la camera usa la 1.
+  config.sccb_i2c_port = CAMERA_I2C_PORT;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;  // 20 MHz, il valore dell'esempio Espressif
@@ -190,14 +313,20 @@ bool initCamera() {
     Serial.printf("Camera init failed: 0x%x\n", err);
     return false;
   }
+  Serial.println("Camera ready");
   return true;
 }
 
 /**
- * Qui andrà il rilevamento (computer vision o una soglia).
+ * Qui andrà il rilevamento: deve restituire true quando nel frame c'è
+ * qualcosa per cui vale la pena svegliare il Pi (ad esempio un insetto che
+ * passa davanti alla camera).
  * Per ora prende un frame, non lo guarda e lo restituisce: sempre false.
  */
 bool eventDetected() {
+  if (!cameraReady) {
+    return false;
+  }
   // fb = frame buffer: contiene i byte JPEG (fb->buf), la dimensione e altri dati.
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) {
@@ -214,25 +343,160 @@ bool eventDetected() {
   return hit;
 }
 
-// Gestisce un evento (automatico o manuale) rispettando il cooldown.
-void onEvent() {
-  const uint32_t now = millis();  // millisecondi dall'accensione dell'ESP
-  if (hasHandledEvent && now - lastEventMs < EVENT_COOLDOWN_MS) {
-    Serial.println("Event ignored (cooldown)");
+// ---------------------------------------------------------------------------
+// BME280
+// ---------------------------------------------------------------------------
+
+// Inizializza il BME280 e lo lascia in sleep: in forced mode il sensore fa
+// una misura solo quando glielo chiediamo e poi torna in sleep da solo
+// (consuma meno e si scalda meno). Adattato dagli esempi SparkFun (vedi
+// intestazione).
+bool initBme() {
+  bme.setI2CAddress(BME_ADDRESS);
+  // Restituisce false se all'indirizzo non risponde un BME280/BMP280.
+  if (!bme.beginI2C(Wire)) {
+    Serial.printf("BME280 not found at 0x%02X\n", BME_ADDRESS);
+    return false;
+  }
+  bme.setTempOverSample(1);
+  bme.setPressureOverSample(1);
+  bme.setHumidityOverSample(1);
+  bme.setFilter(0);  // filtro spento
+  bme.setMode(MODE_SLEEP);
+  Serial.printf("BME280 ready at 0x%02X\n", BME_ADDRESS);
+  return true;
+}
+
+// Da chiamare a ogni giro di loop(): se il BME280 non è pronto prova a
+// inizializzarlo, al massimo una volta ogni BME_RETRY_MS.
+void serviceBme() {
+  if (bmeReady) {
     return;
   }
-  // Il cooldown parte da adesso, anche se poi il wake non riesce.
-  lastEventMs = now;
-  hasHandledEvent = true;
+  const uint32_t now = millis();
+  if (hasBmeInitAttempt && now - lastBmeInitMs < BME_RETRY_MS) {
+    return;
+  }
+  hasBmeInitAttempt = true;
+  lastBmeInitMs = now;
+  bmeReady = initBme();
+}
 
-  Serial.println("Event: ensuring Pi is on");
-  if (!ensurePiOn()) {
-    Serial.println("Event: wake failed");
+// Chiede una misura in forced mode e aspetta che finisca. Restituisce false
+// se il sensore non finisce entro BME_MEASURE_TIMEOUT_MS (ad esempio perché
+// il cavo si è staccato: in quel caso il bit "measuring" si legge sempre a 1).
+bool takeForcedMeasurement() {
+  bme.setMode(MODE_FORCED);
+  const uint32_t t0 = millis();
+  delay(2);  // lasciamo al sensore il tempo di iniziare la misura
+  while (bme.isMeasuring()) {
+    if (millis() - t0 >= BME_MEASURE_TIMEOUT_MS) {
+      return false;
+    }
+    delay(1);
+  }
+  return true;
+}
+
+/**
+ * Fa una misura e la scrive sul monitor USB. Se la misura fallisce segna il
+ * sensore come non pronto, così serviceBme() riprova a inizializzarlo.
+ */
+bool measure(Reading& out) {
+  if (!bmeReady) {
+    return false;
+  }
+  if (!takeForcedMeasurement()) {
+    Serial.println("BME280: measurement timeout");
+    bmeReady = false;
+    return false;
+  }
+  const float t = bme.readTempC();
+  const float rh = bme.readFloatHumidity();
+  const float p = bme.readFloatPressure() / 100.0f;  // Pa -> hPa
+  if (isnan(t) || isnan(rh) || isnan(p)) {
+    Serial.println("BME280: invalid reading");
+    bmeReady = false;
+    return false;
+  }
+
+  out = {nextSeq++, millis(), t, rh, p};
+  Serial.printf("BME280 #%lu: %.2f C  %.2f %%  %.2f hPa\n",
+                (unsigned long)out.seq, t, rh, p);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// UART verso il Pi
+// ---------------------------------------------------------------------------
+
+// Manda una misura al Pi nel formato BME,... (vedi intestazione).
+void sendReading(const Reading& r, char kind) {
+  piSerial.printf("BME,%lu,%c,%lu,%.2f,%.2f,%.2f\n", (unsigned long)r.seq,
+                  kind, (unsigned long)(millis() - r.ms), r.temperature,
+                  r.humidity, r.pressure);
+  Serial.printf("Sent to Pi: reading #%lu (%c)\n", (unsigned long)r.seq, kind);
+}
+
+/**
+ * Da chiamare a ogni giro di loop(). Segue ALIVE:
+ * - quando sale apre la UART e fa subito la misura del risveglio;
+ * - passati PI_BOOT_DELAY_MS la manda al Pi, poi manda una misura ogni
+ *   BME_PERIOD_MS;
+ * - quando scende chiude la UART e lascia il pin TX come ingresso, così non
+ *   porta tensione al Pi spento.
+ */
+void servicePiLink() {
+  const bool alive = piAlive();
+  const uint32_t now = millis();
+
+  if (alive && !piLinkOpen) {
+    // rx = -1: nessun pin di ricezione, la UART va solo verso il Pi.
+    piSerial.begin(PI_UART_BAUD, SERIAL_8N1, -1, PIN_PI_TX);
+    piLinkOpen = true;
+    aliveSinceMs = now;
+    wakeReadingSent = false;
+    wakeReadingValid = measure(wakeReading);
+    Serial.println("Pi UART open: wake reading taken");
+    return;
+  }
+  if (!alive && piLinkOpen) {
+    piSerial.end();
+    pinMode(PIN_PI_TX, INPUT);
+    piLinkOpen = false;
+    Serial.println("Pi UART closed");
+    return;
+  }
+  if (!piLinkOpen || now - aliveSinceMs < PI_BOOT_DELAY_MS) {
+    return;
+  }
+
+  if (!wakeReadingSent) {
+    // Se al risveglio il BME280 non rispondeva, riproviamo adesso.
+    if (!wakeReadingValid) {
+      wakeReadingValid = measure(wakeReading);
+    }
+    if (wakeReadingValid) {
+      sendReading(wakeReading, 'W');
+    }
+    wakeReadingSent = true;
+    lastPeriodicMs = now;
+    return;
+  }
+
+  if (BME_PERIOD_MS > 0 && now - lastPeriodicMs >= BME_PERIOD_MS) {
+    lastPeriodicMs = now;
+    Reading r;
+    if (measure(r)) {
+      sendReading(r, 'P');
+    }
   }
 }
 
+// ---------------------------------------------------------------------------
+
 void setup() {
-  // Seriale a 115200 baud per i log e per il comando 'w'.
+  // Seriale USB a 115200 baud per i log e per i comandi 'w' e 'r'.
   Serial.begin(115200);
   delay(500);
   Serial.println("ESP32-CAM wake node starting");
@@ -243,33 +507,46 @@ void setup() {
   // ALIVE come ingresso con il pulldown interno, oltre a quello esterno da 10 kΩ:
   // se il filo è scollegato leggiamo LOW.
   pinMode(PIN_ALIVE, INPUT_PULLDOWN);
+  // UART verso il Pi chiusa finché ALIVE non sale.
+  pinMode(PIN_PI_TX, INPUT);
 
-  // Senza camera ci fermiamo qui. Attenzione: in questo caso anche il
-  // comando manuale 'w' smette di funzionare (vedi issues.md).
-  if (!initCamera()) {
-    Serial.println("Halting: camera required for event path");
-    while (true) {
-      delay(1000);
-    }
+  // Bus I2C del BME280.
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
+
+  // Senza camera niente wake automatici, ma BME280, UART e comando 'w'
+  // continuano a funzionare.
+  cameraReady = initCamera();
+  if (!cameraReady) {
+    Serial.println("Camera not available: automatic wake disabled");
   }
 
-  Serial.printf("Pins: WAKE=%d ALIVE=%d | piAlive=%d\n", PIN_WAKE, PIN_ALIVE,
+  Serial.printf("Pins: WAKE=%d ALIVE=%d UART TX=%d I2C SDA=%d SCL=%d | piAlive=%d\n",
+                PIN_WAKE, PIN_ALIVE, PIN_PI_TX, PIN_I2C_SDA, PIN_I2C_SCL,
                 piAlive() ? 1 : 0);
 }
 
 void loop() {
+  serviceBme();
+  servicePiLink();
+
   // Percorso automatico: con lo stub attuale non scatta mai.
   if (eventDetected()) {
     onEvent();
   }
 
-  // Prova manuale: aprire il monitor seriale (pio device monitor), scrivere
-  // w e premere Invio. Leggiamo un carattere per giro; l'Invio viene ignorato.
+  // Prove manuali: aprire il monitor seriale (pio device monitor), scrivere
+  // w (wake) oppure r (misura del BME280) e premere Invio. Leggiamo un
+  // carattere per giro; l'Invio viene ignorato.
   if (Serial.available()) {
     const char c = Serial.read();
     if (c == 'w' || c == 'W') {
       Serial.println("Manual wake request");
       onEvent();
+    } else if (c == 'r' || c == 'R') {
+      Reading r;
+      if (!measure(r)) {
+        Serial.println("BME280 not ready");
+      }
     }
   }
 

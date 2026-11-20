@@ -12,9 +12,9 @@ I numeri restano fissi anche quando un problema viene risolto, così i riferimen
 
 | Stato | Problemi |
 |---|---|
-| ✅ Risolti | 1, 2, 3, 4, 7, 10, 12, 13, 14, 15, 16 |
-| ◐ Risolti in parte | 6, 17 |
-| ⏳ Aperti | 5, 8, 9, 11, 18–28 |
+| ✅ Risolti | 1, 2, 3, 4, 7, 10, 11, 12, 13, 14, 15, 16, 25 |
+| ◐ Risolti in parte | 6, 17, 24, 27 |
+| ⏳ Aperti | 5, 8, 9, 18–23, 26, 28 |
 
 > **Attenzione:** le correzioni sono state provate solo su PC, con una camera finta e senza sensori: wrapper, import, parsing GPS e fallimento della camera. Vanno riprovate sul Raspberry Pi vero prima di abilitare il servizio.
 
@@ -101,12 +101,12 @@ Non si controllavano qualità del fix e checksum, e si riconosceva solo `$GPGGA`
 
 **Ancora da fare:** salvare `fix_quality` e `hdop` anche nel CSV e nel JSON (vedi #8).
 
-### 11. Il GPIO14 dell'ESP32 emette un segnale PWM all'avvio
-**Dove:** `firmware/esp32/src/main.cpp` (`PIN_WAKE = 14`)
+### ✅ 11. Il GPIO14 dell'ESP32 emette un segnale PWM all'avvio
+**Dove:** `firmware/esp32/src/main.cpp` (`PIN_WAKE`)
 
 Sull'ESP32 alcuni pin, tra cui il GPIO14, mandano un segnale PWM durante il boot, prima che `setup()` li porti a LOW. Ogni reset o brown-out dell'ESP potrebbe quindi chiudere J2 tramite il PC817 e accendere il Pi senza motivo. Il GPIO14 è anche il clock della microSD sulla ESP32-CAM.
 
-**Soluzione:** verificarlo con l'oscilloscopio. Se succede davvero, spostare WAKE su un pin "tranquillo" della scheda definitiva oppure aggiungere un filtro RC sul LED del PC817.
+**Correzione:** WAKE è stato spostato sul GPIO12. È un pin di strapping che al reset deve essere basso (altrimenti l'ESP non parte), e il LED del PC817 verso massa lo garantisce; non emette segnali al boot. Il GPIO14 ora fa da TX verso il Pi, dove il PWM produce al massimo qualche byte spurio. Resta da controllare con l'oscilloscopio che durante il reset il GPIO12 stia basso, e va aggiornato lo schema KiCad in `hardware/pi5->esp32/`. Dettagli in `docs/setup-risveglio.md`, sezione 2.
 
 ---
 
@@ -153,25 +153,31 @@ In `capture_client.py` la pausa parte dopo scatto e GPS (fino a ~10 s), quindi i
 ### 23. `--warmup-ms` e `--timeout-ms` vengono semplicemente sommati
 Le due opzioni finiscono entrambe in `-t`, quindi non ha senso tenerle separate. L'help dice "passed to libcamera-still", ma non è così.
 
-### 24. Firmware ESP32
-- `camera_config_t config;` non è inizializzata: i campi che non assegniamo (es. `sccb_i2c_port`) contengono valori casuali. Meglio `camera_config_t config = {};`.
-- `pin_sscb_sda/scl` sono nomi deprecati nelle versioni recenti di esp32-camera (`pin_sccb_sda/scl`).
-- Se la camera non si inizializza, il firmware si blocca e non risponde nemmeno al comando `w`, che invece non ha bisogno della camera.
-- `waitForAlive()` blocca il `loop()` per fino a 15 s.
-- `secrets.h.example` e `USE_WIFI` non sono usati.
+### ◐ 24. Firmware ESP32
+- ✅ `camera_config_t config = {};`: i campi non assegnati ora sono azzerati.
+- ✅ Usati i nomi nuovi `pin_sccb_sda/scl`.
+- ✅ Se la camera non si inizializza il firmware non si blocca più: il rilevamento resta disattivato, ma BME280, UART e comando `w` funzionano. Lo stesso vale se manca il BME280, che il firmware riprova a inizializzare ogni 10 s.
+- ⏳ `waitForAlive()` blocca il `loop()` per fino a 15 s: nel frattempo non si acquisiscono frame e non si leggono i comandi dal monitor seriale.
+- ⏳ `secrets.h.example` e `USE_WIFI` non sono usati.
 
-### 25. `platformio.ini`: flag `-mfix=fp`
-Non ci risulta un flag GCC Xtensa con questo nome (esiste `-mfix-esp32-psram-cache-issue`). Va verificato con `pio run -v` (vedi #27): se il compilatore lo rifiuta o lo ignora, va tolto.
+### ✅ 25. `platformio.ini`: flag `-mfix=fp`
+Non ci risulta un flag GCC Xtensa con questo nome (esiste `-mfix-esp32-psram-cache-issue`).
+
+**Correzione:** l'abbiamo verificato compilando: il compilatore risponde `unrecognized command-line option '-mfix=fp'` e la build fallisce. Il flag è stato tolto da `platformio.ini`.
 
 ### 26. Back-powering tramite ALIVE
-Con `gpio=17=op,dh` il Pi tiene GPIO17 alto. Se l'ESP non è alimentato, quei 3,3 V entrano nel GPIO13 e, attraverso i diodi di protezione interni, arrivano al suo rail di alimentazione. Il pulldown da 10 kΩ va verso massa e non limita questa corrente. Conviene una resistenza in serie (es. 1 kΩ) o un secondo optoisolatore.
+Con `gpio=17=op,dh` il Pi tiene GPIO17 alto. Se l'ESP non è alimentato, quei 3,3 V entrano nel GPIO2 (prima GPIO13) e, attraverso i diodi di protezione interni, arrivano al suo rail di alimentazione. Il pulldown da 10 kΩ va verso massa e non limita questa corrente. Conviene una resistenza in serie (es. 1 kΩ) o un secondo optoisolatore.
 
-### 27. Il firmware non è stato compilato dopo le ultime modifiche
+Lo stesso rischio c'è, al contrario, sulla UART verso il Pi: una linea TX a riposo è alta e alimenterebbe il Pi in halt attraverso il suo RXD. Il firmware tiene la UART chiusa finché ALIVE è basso; in più è previsto 1 kΩ in serie sul filo ESP TX → Pi RXD. Va misurato al banco (vedi `docs/setup-risveglio.md`, sezione 4, prova 9).
+
+### ◐ 27. Il firmware non è stato compilato dopo le ultime modifiche
 **Dove:** `firmware/esp32/`
 
 Nelle ultime revisioni abbiamo cambiato solo i commenti di `main.cpp` e `platformio.ini` (abbiamo verificato in automatico che il codice, tolti i commenti, sia identico). Sulla macchina della revisione però PlatformIO non è installato, quindi il firmware non è stato compilato. Non sappiamo nemmeno se compilasse prima, perché il repository non contiene un log di build.
 
-**Cosa fare:** dalla cartella `firmware/esp32/` lanciare `pio run -v`, salvare l'esito (anche solo come nota in questo file) e controllare in particolare il flag `-mfix=fp` (#25) e gli avvisi di deprecazione (#24). Poi caricare il firmware e ripetere la prova con il comando `w`.
+**Aggiornamento (20 novembre 2026):** il firmware (board `esp32cam`) compila senza errori né warning con PlatformIO, piattaforma espressif32 8.0.0 (arduino-esp32 3.3.12) e SparkFun BME280 2.0.9. Uso: RAM 11 %, flash 12 %. Compilando abbiamo anche scoperto che la versione precedente **non poteva compilare**, per il flag `-mfix=fp` (#25).
+
+**Cosa resta:** caricarlo sulla scheda e ripetere le prove con i comandi `w` e `r` e con la UART verso il Pi.
 
 ### 28. Valutare Picamera2 al posto di `rpicam-still`
 **Dove:** `raspberry_pi/smartcam/capture_client.py`

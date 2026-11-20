@@ -13,7 +13,7 @@
 
 ## Licenza
 
-Manca un file `LICENSE`. Il codice include parti con licenza MIT (Adafruit, pynmea2, RPi.bme280) e Apache-2.0 (esempio CameraWebServer di Espressif). La licenza Apache-2.0 chiede di mantenere l'avviso di copyright.
+Manca un file `LICENSE`. Il codice include parti con licenza MIT (Adafruit CircuitPython, pynmea2, RPi.bme280, SparkFun BME280) e Apache-2.0 (esempio CameraWebServer di Espressif). Entrambe chiedono di mantenere l'avviso di copyright.
 
 ## Diario delle prove al banco
 
