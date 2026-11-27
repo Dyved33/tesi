@@ -26,10 +26,10 @@ constexpr int PIN_WAKE = 42;     // Uscita verso optoisolatore e pulsante J2.
 constexpr int PIN_ALIVE = 1;     // Ingresso dal segnale che indica Pi acceso.
 constexpr int PIN_UART_TX = 2;   // Trasmissione UART ESP -> ricezione UART Pi.
 constexpr int PIN_BME_SDA = 47;  // Linea dati I2C del BME280.
-constexpr int PIN_BME_SCL = 48;  // Linea clock I2C del BME280.
+constexpr int PIN_BME_SCL = 21;  // Linea clock I2C del BME280.
 
 // SDO a GND sul modulo imposta normalmente 0x76; SDO a 3V3 imposta 0x77.
-constexpr uint8_t BME_ADDRESS = 0x76;
+constexpr uint8_t BME_ADDRESS = 0x77;
 
 // Tempi della logica di wake e del collegamento dati. Le durate sono in ms.
 constexpr uint32_t WAKE_PULSE_MS = 200;       // Durata dell'impulso sul PC817.
@@ -61,6 +61,47 @@ static bool handledEvent = false;
 /** Ritorna true quando l'ingresso ALIVE è a livello logico alto. */
 bool piAlive() {
   return digitalRead(PIN_ALIVE) == HIGH;
+}
+
+/**
+ * Diagnostica I2C: prova tutti gli indirizzi e stampa quelli che rispondono.
+ * Per ogni dispositivo legge anche il registro 0xD0 (ID chip): 0x60 = BME280,
+ * 0x56-0x58 = BMP280 (senza umidita', rifiutato dal driver SparkFun).
+ * Restituisce il numero di dispositivi trovati.
+ */
+static int scanBus() {
+  int found = 0;
+  for (uint8_t a = 1; a < 127; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() != 0) continue;
+    found++;
+    Serial.printf("  trovato dispositivo a 0x%02X", a);
+    Wire.beginTransmission(a);
+    Wire.write(0xD0);
+    if (Wire.endTransmission(false) == 0 && Wire.requestFrom(a, (uint8_t)1) == 1) {
+      Serial.printf(", ID chip 0x%02X", Wire.read());
+    }
+    Serial.println();
+  }
+  return found;
+}
+
+/** Scansiona il bus; se e' vuoto riprova con SDA e SCL scambiati. */
+void scanI2c() {
+  Serial.printf("Scansione I2C con SDA=%d SCL=%d\n", PIN_BME_SDA, PIN_BME_SCL);
+  if (scanBus() > 0) return;
+
+  Serial.println("  nessun dispositivo; provo con SDA e SCL invertiti");
+  Wire.end();
+  Wire.begin(PIN_BME_SCL, PIN_BME_SDA, 100000);
+  if (scanBus() > 0) {
+    Serial.println("  -> risponde a pin invertiti: scambia i due fili SDA/SCL");
+  } else {
+    Serial.println("  -> nulla anche invertendo: controlla 3V3, GND, saldature, pull-up");
+  }
+  // Ripristina la configurazione normale.
+  Wire.end();
+  Wire.begin(PIN_BME_SDA, PIN_BME_SCL, 100000);
 }
 
 /**
@@ -244,6 +285,7 @@ void setup() {
   // Avvia I2C a 100 kHz sui pin indicati; su ESP32 si possono rimappare GPIO.
   Wire.begin(PIN_BME_SDA, PIN_BME_SCL, 100000);
   initBme();
+  if (!bmeReady) scanI2c(); // Diagnostica: cosa vede il bus?
 
   Serial.printf("Pin ESP32-S3-CAM: WAKE=%d ALIVE=%d UART_TX=%d SDA=%d SCL=%d\n",
                 PIN_WAKE, PIN_ALIVE, PIN_UART_TX, PIN_BME_SDA, PIN_BME_SCL);
@@ -262,6 +304,7 @@ void loop() {
     const char command = Serial.read();
     if (command == 'w' || command == 'W') onEvent();
     if (command == 'r' || command == 'R') sendReading();
+    if (command == 'i' || command == 'I') scanI2c(); // Ripete la scansione I2C.
   }
 
   delay(200); // Riduce il busy loop e limita la frequenza dei controlli.
