@@ -8,3 +8,4 @@ __pycache__/
 .vscode/ipch
 .venv/
 .env.systemd
+firmware/esp32/src/.Rhistory
