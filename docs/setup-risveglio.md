@@ -1,275 +1,265 @@
 # Configurazione di Raspberry Pi ed ESP32-S3-CAM
 
-Questa guida raccoglie le configurazioni di Pi ed ESP32-S3-CAM, i collegamenti tra le due schede e l'ordine in cui conviene fare le prove al banco. I requisiti sono quelli di [`plan.pdf`](plan.pdf). Tutto quello che riguarda l'hardware è da **verificare sulle schede vere** prima di collegare qualcosa: non siamo ancora alla configurazione di campo.
+Qui ci sono le configurazioni di Pi ed ESP, i collegamenti tra le due schede e l'ordine in cui fare le prove al banco. I requisiti vengono da [`plan.pdf`](plan.pdf), i pin da [pinout.md](pinout.md).
 
-## A che punto siamo
+## A che punto siamo (27/11/2026)
 
-- **ESP32:** la scheda fotografata è una variante ESP32-S3-CAM con modulo ESP32-S3-N16R8, camera OV3660, slot SD e due USB-C. Il firmware attuale (`firmware/esp32/src/main.ino`) gestisce WAKE, ALIVE, BME280 e UART; non inizializza ancora la camera e non è stato collaudato sulla scheda.
-- **Circuito di risveglio:** lo schema c'è (optoisolatore PC817, vedi sotto), ma va ancora montato e provato.
-- **Raspberry Pi:** ci sono gli script di scatto e di lettura sensori, con alcuni bug noti ([issues.md](../issues.md)). Database, modalità continuativa e analisi delle immagini sono ancora da fare.
+- Il wake funziona: dal monitor dell'ESP il comando `w` accende il Pi.
+- Dopo il ciclo il Pi torna in halt da solo: è il comportamento voluto di `insect-capture.service`.
+- L'ESP non trova il BME280: la scansione I2C non vede nessun dispositivo, nemmeno con SDA e SCL scambiati. Non è un problema di indirizzo ma di collegamento. Vedi la sezione 2.4.
+- Il ricevitore delle misure sul Pi adesso c'è (`smartcam.esp_link`), ma serve il filo in più Pi GPIO14 → ESP GPIO41.
+- Il firmware adesso usa la OV3660 per rilevare il movimento e accendere il Pi: è compilato ma non ancora provato sulla scheda.
 
 ---
 
 ## 1. Raspberry Pi 5
 
-### Halt e consumo
+### 1.1 Halt e consumo
 
-Quando il Pi non serve lo mettiamo in **halt**: il sistema operativo è spento, ma la scheda resta collegata all'alimentazione e si può riaccendere dal pulsante o dai pad J2. Se invece si toglie l'alimentazione, J2 non serve più a niente. ESP32 e BME280 devono restare alimentati anche mentre il Pi è in halt.
+Quando il Pi non serve lo mettiamo in halt: il sistema operativo è spento ma la scheda resta alimentata e si riaccende dal pulsante o dai pad J2. Se si toglie l'alimentazione J2 non serve più a niente. ESP32 e BME280 devono restare alimentati anche con il Pi in halt.
 
-Nella EEPROM del Pi impostiamo:
+Nella EEPROM del Pi (`sudo rpi-eeprom-config --edit`):
 
 ```ini
 POWER_OFF_ON_HALT=1
 WAKE_ON_GPIO=0
 ```
 
-`POWER_OFF_ON_HALT=1` spegne anche il 3,3 V durante l'halt, e il consumo scende a circa 0,01 W. `WAKE_ON_GPIO=0` disattiva il risveglio tramite GPIO3: a noi basta J2. Per modificarle:
+`POWER_OFF_ON_HALT=1` spegne anche il 3,3 V durante l'halt e il consumo scende a circa 0,01 W secondo la [documentazione](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#raspberry-pi-bootloader-configuration) (lo misureremo noi). Ha anche un effetto che ci serve: quando il 3,3 V si spegne, GPIO17 va a zero, quindi ALIVE basso vuol dire che l'arresto è davvero finito. `WAKE_ON_GPIO=0` disattiva il risveglio da GPIO3, perché usiamo J2.
 
-```bash
-sudo rpi-eeprom-config --edit
-```
+### 1.2 `config.txt`
 
-Conviene controllare sulla [documentazione ufficiale](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#raspberry-pi-bootloader-configuration) che le opzioni siano le stesse per la versione di bootloader installata. Gli 0,01 W sono il valore riportato da Raspberry Pi: il consumo reale lo misureremo noi.
-
-### Segnale ALIVE
-
-Per far sapere all'ESP che il Pi è acceso usiamo il GPIO17, che deve essere alto appena possibile durante il boot. In `/boot/firmware/config.txt` aggiungiamo:
+In `/boot/firmware/config.txt`, in fondo:
 
 ```ini
-gpio=17=op,dh
+gpio=17=op,dh          # ALIVE: GPIO17 uscita alta appena possibile durante il boot
+dtparam=uart0=on       # UART0 su GPIO14/15 -> /dev/ttyAMA0, collegata all'ESP
+dtoverlay=uart2-pi5    # UART2 su GPIO4/5   -> /dev/ttyAMA2, collegata al GPS
+dtparam=spi=on         # SPI0 per l'MCP3008
 ```
 
-(`op` = uscita, `dh` = livello alto). Il collegamento è GPIO17 del Pi → GPIO1 dell'ESP, con un pulldown da 10 kΩ verso massa e la massa in comune.
+Sulla UART0 non deve esserci la console di Linux, altrimenti l'ESP riceve i messaggi del kernel e il prompt di login. Con `sudo raspi-config` → Interface Options → Serial Port: "login shell over serial" No, "serial port hardware" Sì. Poi controllare che in `/boot/firmware/cmdline.txt` non ci sia `console=serial0,115200`.
 
-Va verificato con il multimetro cosa fa il pin durante boot, funzionamento, spegnimento e halt. ALIVE dice solo che il pin è alto: non garantisce che Linux sia pronto, e durante lo spegnimento resta alto per un po'.
-
-### Servizio di scatto (app selettiva)
-
-L'unità [`insect-capture.service`](../raspberry_pi/systemd/insect-capture.service) a ogni boot fa una foto più una lettura dei sensori e poi spegne il Pi. Lo spegne **in ogni caso**: sia se va tutto bene, sia se qualcosa fallisce, sia se lo script si blocca per più di 3 minuti. La configurazione qui sotto assume utente `rpi5-03` e progetto in `/home/rpi5-03/progetto`; se hai scelto un altro utente o percorso, sostituiscili coerentemente anche in `insect-capture.service` e `.env.systemd`.
-
-**Prima configurazione via microSD e SSH.** I comandi seguenti assumono che Raspberry Pi OS sia già scritto sulla scheda, che l'utente sia `rpi5-03` e che la rete Wi-Fi sia configurata. Dal PC, con la scheda inserita, crea un file vuoto chiamato `maintenance` nella partizione `bootfs` (su Raspberry Pi OS recenti può apparire come `bootfs`). Abilita SSH nella configurazione dell'immagine oppure, se il tuo sistema supporta il metodo file, crea lì anche un file vuoto `ssh`. Espelli la scheda in sicurezza e avvia il Pi.
-
-Dal terminale del PC collegati al Pi (usa l'indirizzo IP al posto del nome se `raspberrypi.local` non viene trovato):
+Dopo il riavvio:
 
 ```bash
-ssh rpi5-03@raspberrypi.local
+ls -l /dev/ttyAMA0 /dev/ttyAMA2 /dev/spidev0.0   # devono esistere tutti e tre
+pinctrl get 17                                   # deve dire "op dh"
 ```
 
-Sul Pi, prepara la directory del progetto e l'ambiente Python. Questo presume che il repository sia già presente in `/home/rpi5-03/progetto`; se non lo è, copialo/clonalo prima in quella directory.
+Il GPS prima era configurato anche lui su `/dev/ttyAMA0`, cioè sugli stessi pin dell'ESP: per questo lo abbiamo spostato sulla UART2.
+
+### 1.3 Utente, permessi e orologio
+
+L'utente che esegue gli script deve poter usare seriali, GPIO e SPI:
 
 ```bash
-mkdir -p /home/rpi5-03/progetto
+sudo usermod -aG dialout,gpio,spi,video rpi5-03
+```
+
+Il timestamp delle misure dell'ESP è calcolato con l'orologio del Pi, quindi l'ora del Pi deve essere giusta. In campo senza rete serve la batteria dell'RTC sul connettore BAT del Pi 5. Si controlla con `timedatectl`. Se l'ora è prima del 2026 il Pi non la manda all'ESP (lo scrive nel log). In ogni CSV c'è anche una colonna (`pi_clock_synced` o `sensors_clock_synced`) che dice se in quel momento l'orologio era stato sincronizzato con NTP: così dopo si possono riconoscere i dati con l'ora non verificata.
+
+Il Pi nell'app selettiva si spegne da solo a fine ciclo, quindi per leggere i log di un ciclo bisogna guardare l'avvio precedente. Per farlo il journal deve essere persistente:
+
+```bash
+sudo mkdir -p /var/log/journal
+sudo systemctl restart systemd-journald
+journalctl -b -1 -u insect-capture.service   # log del ciclo dell'avvio precedente
+```
+
+### 1.4 Software
+
+Prima configurazione: scrivere Raspberry Pi OS (Bookworm, 64 bit) sulla microSD con Raspberry Pi Imager, abilitando SSH e Wi-Fi. Prima di avviare, creare un file vuoto `maintenance` nella partizione `bootfs` (vedi 1.5). Poi:
+
+```bash
+ssh rpi5-03@rpi5-03.local
+git clone <url del repository> /home/rpi5-03/progetto
 cd /home/rpi5-03/progetto/raspberry_pi
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install -r requirements.txt
-```
-
-Il virtualenv usa i pacchetti di Raspberry Pi OS (in particolare `gpiozero` e il backend GPIO) e installa `pyserial` e `pynmea2` da `requirements.txt`. La fotocamera viene chiamata tramite il comando di sistema `rpicam-still`.
-
-Sempre sul Pi, dalla root del progetto, crea il file locale d'ambiente partendo dall'esempio e controllane il contenuto:
-
-```bash
-cd /home/rpi5-03/progetto
+cd ..
 cp raspberry_pi/systemd/.env.systemd.example .env.systemd
 nano .env.systemd
 ```
 
-Verifica che contenga almeno `CAPTURE_MODE=selective`, `CAPTURE_INTERVAL=30`, `PYENV_ROOT=/home/rpi5-03/progetto/raspberry_pi/.venv` e `PROJECT_DIR=/home/rpi5-03/progetto`. Lascia commentate le righe `DAILY_WINDOW_START`, `DAILY_WINDOW_END` e `SENSOR_INTERVAL`: sono segnaposto per funzioni non implementate. In `nano`, salva con Ctrl+O, Invio ed esci con Ctrl+X.
+Il virtualenv usa `gpiozero` e `lgpio` di Raspberry Pi OS (per questo `--system-site-packages`). In `.env.systemd` controllare percorsi, cadenze e porte seriali.
 
-Con `maintenance` presente il servizio viene saltato e il Pi resta disponibile. Prova manualmente il flusso dalla root del progetto:
+Prova del ciclo selettivo a mano, senza spegnimento:
 
 ```bash
-cd /home/rpi5-03/progetto
-bash raspberry_pi/capture_rpi.sh --oneshot
+bash raspberry_pi/capture_rpi.sh --oneshot            # foto + ESP + sensori
+bash raspberry_pi/capture_rpi.sh --oneshot --no-esp   # se l'ESP non è collegato
 ```
 
-Questo prova una foto e una lettura sensori; per la prova completa servono camera e sensori collegati. Non installare/abilitare il servizio durante la manutenzione: il servizio va attivato solo dopo il collaudo, perché spegne il Pi dopo ogni avvio.
+I file finiscono in `raspberry_pi/data/` ([dati-csv.md](dati-csv.md)). L'exit code è 1 se foto, ESP o uno dei sensori non hanno funzionato; il motivo è nel log e nelle colonne `*_error*` dei CSV.
 
-Quando il collaudo è concluso e vuoi attivare il ciclo selettivo, rimuovi prima il file `maintenance` dalla partizione `bootfs` (dal PC) oppure dal Pi, poi installa e abilita il servizio:
+Modalità continuativa (foto ogni `CAPTURE_INTERVAL` secondi, sensori ed ESP ogni `SENSOR_INTERVAL`, dentro la fascia `DAILY_WINDOW_*`):
 
 ```bash
-cd /home/rpi5-03/progetto
+bash raspberry_pi/capture_rpi.sh
+```
+
+### 1.5 Servizio dell'app selettiva e modalità manutenzione
+
+[`insect-capture.service`](../raspberry_pi/systemd/insect-capture.service) a ogni boot lancia `capture_rpi.sh --oneshot` e poi spegne il Pi in ogni caso: se va tutto bene, se qualcosa fallisce o se lo script resta bloccato per più di 3 minuti. Va abilitato solo dopo aver provato tutto a mano:
+
+```bash
 sudo cp raspberry_pi/systemd/insect-capture.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable insect-capture.service
 ```
 
-⚠️ **Non abilitarla durante le prove** o per la raccolta continua: il Pi si spegnerebbe dopo ogni avvio.
+Non va abilitato per la raccolta continuativa né durante le prove, perché spegne il Pi a ogni avvio.
 
-**Modalità manutenzione.** Con il servizio abilitato il Pi si spegne subito dopo lo scatto, quindi non c'è tempo per collegarsi in SSH. Per tenerlo acceso basta creare un file vuoto `maintenance` nella partizione di boot:
+Per tenere il Pi acceso con il servizio abilitato si crea un file vuoto `maintenance` nella partizione di boot: finché esiste il servizio viene saltato.
 
 ```bash
 sudo touch /boot/firmware/maintenance   # dal Pi
-# oppure dal PC: inserire la microSD e creare il file "maintenance" nella partizione "bootfs"
+# dal PC: inserire la microSD e creare il file "maintenance" in "bootfs"
 ```
 
-Finché il file esiste il servizio viene saltato. Per tornare al funzionamento normale basta cancellarlo.
-
-Per lanciare a mano lo stesso flusso, dalla root del progetto:
-
-```bash
-bash raspberry_pi/capture_rpi.sh --oneshot
-```
-
-Lo script ha bisogno di un ambiente Python (pyenv o virtualenv) con le dipendenze di [`requirements.txt`](../raspberry_pi/requirements.txt). Copiare [`.env.systemd.example`](../raspberry_pi/systemd/.env.systemd.example) nella root del progetto come `.env.systemd` e impostare i percorsi del proprio Pi.
-
-> Prima di abilitare il servizio in campo va provato tutto il ciclo sul Pi vero: le correzioni ai problemi bloccanti di [issues.md](../issues.md) sono state provate solo su PC, con una camera finta.
+Per tornare al funzionamento normale basta cancellarlo.
 
 ---
 
-## 2. ESP32-S3-CAM: BME280 e collegamento con il Pi
+## 2. ESP32-S3-CAM
 
-### 2.1 Scheda e stato del firmware
+### 2.1 Scheda e firmware
 
-La scheda riconoscibile dalle foto è una variante generica **ESP32-S3-CAM**: modulo ESP32-S3-N16R8 (16 MB flash e 8 MB PSRAM), camera OV3660 su flat, slot microSD, due USB-C e header da 40 pin. Sul PCB si leggono `V1695` e `127294G_Y1127_231016`. Questi codici non identificano in modo univoco il produttore e non è disponibile uno schema ufficiale verificato per questa revisione; trattare quindi il pinout esterno come da confermare al banco.
+La scheda è una ESP32-S3-CAM generica: modulo ESP32-S3-N16R8 (16 MB di flash, 8 MB di PSRAM), camera OV3660 collegata con il suo cavo flat, slot microSD, due USB-C. Non c'è uno schema ufficiale per questa revisione, quindi la mappa dei GPIO in [pinout.md](pinout.md) è da confermare al banco.
 
-Il firmware in `firmware/esp32/src/main.ino` al momento:
+Il firmware è un unico file, `firmware/esp32/main/main.ino`. Fa quattro cose:
 
-- accetta `w` dal monitor USB e genera un impulso WAKE se ALIVE è basso;
-- legge il BME280 via I2C, riprovando l'inizializzazione ogni 10 s;
-- apre la UART quando ALIVE sale, aspetta 60 s e invia una misura, poi una al minuto;
-- non inizializza la camera: il rilevamento automatico non è presente.
+- misura il BME280 ogni minuto;
+- guarda la scena con la OV3660 e, se vede un movimento, accende il Pi;
+- tiene misure ed eventi in un buffer finché il Pi non li scarica;
+- risponde ai comandi del Pi sulla UART.
 
-### 2.2 Configurazione PlatformIO
+Forecaster e decider non ci sono ancora: per ora ogni movimento prova a svegliare il Pi, con almeno 30 s tra un wake e l'altro.
 
-`firmware/esp32/platformio.ini` usa l'ambiente `esp32s3_cam`, con `board = esp32-s3-devkitc-1` come profilo generico, flash da 16 MB e PSRAM OPI. La scheda non è una DevKitC-1 ufficiale: il profilo serve a selezionare il target ESP32-S3 e va considerato una base di compilazione. Il firmware compila con PlatformIO 8.0.0 / Arduino-ESP32 3.3.12; non è ancora stato caricato o collaudato sulla scheda reale.
+In cima al file c'è l'interruttore `#define DIAGNOSTICA 0`. Con `1` lo stesso firmware ha in più i comandi per provare il cablaggio (sezione 2.3). Il codice di campo è identico nelle due versioni, quindi non ci sono due copie da tenere allineate. In campo va caricato con `0`.
 
-### 2.3 GPIO assegnati nel firmware
+La Camera Module 3 non si può collegare all'ESP32-S3: usa un'interfaccia MIPI CSI-2 e l'ESP32-S3 ha solo l'interfaccia parallela (DVP) della OV3660. Per questo la CM3 resta sul Pi e fa le foto vere, mentre la OV3660 serve solo a capire quando vale la pena accendere il Pi.
 
-La mappa sotto evita i GPIO usati dalla camera DVP e dalla PSRAM secondo il pinout reperibile per questa famiglia di schede. Non essendoci uno schema ufficiale della specifica revisione, questi collegamenti sono **proposti, non collaudati**. Controllare continuità e livelli prima di collegare Pi, BME280 o optoisolatore.
+### 2.2 Caricare il firmware (Arduino IDE)
 
-| GPIO ESP32-S3 | Funzione firmware | Collegamento previsto |
-|---|---|---|
-| GPIO42 | WAKE, uscita | 330 Ω → LED PC817; il transistor PC817 chiude J2 del Pi |
-| GPIO1 | ALIVE, ingresso | dal GPIO17 del Pi; pulldown esterno 10 kΩ verso massa |
-| GPIO2 | UART TX | tramite 1 kΩ al GPIO15/RXD del Pi (pin fisico 10) |
-| GPIO47 | I2C SDA | SDA del modulo GY-BME280 |
-| GPIO48 | I2C SCL | SCL del modulo GY-BME280 |
-| 3V3 | alimentazione BME280 | VCC e CSB |
-| GND | massa | GND e SDO del BME280; massa comune secondo lo schema del circuito |
-| 5V | alimentazione ESP | usare una porta/alimentazione USB adeguata |
+1. Installare il supporto per le schede ESP32 (Board Manager: "esp32" di Espressif, versione 3.x) e la libreria "SparkFun BME280" dal Library Manager. Il driver della camera (`esp_camera.h`) è già compreso nel pacchetto ESP32.
+2. Aprire `firmware/esp32/main/main.ino`.
+3. Impostare:
+   - scheda "ESP32S3 Dev Module";
+   - Flash Size "16MB (128Mb)";
+   - PSRAM "OPI PSRAM" (necessaria: i fotogrammi della camera stanno in PSRAM);
+   - USB CDC On Boot "Disabled" (il monitor passa dal convertitore USB-seriale);
+   - Upload Speed 921600 (se dà errori, 115200).
+4. Collegare la USB-C del convertitore USB-seriale (di solito marcata "COM"), scegliere la porta e caricare. Se l'upload resta fermo su "Connecting...", tenere premuto BOOT, premere e rilasciare RST, poi rilasciare BOOT.
+5. Aprire il Serial Monitor a 115200 baud.
 
-Nel GY-BME280, collegare SDO a GND per l'indirizzo `0x76` (oppure a 3V3 per `0x77`). Alimentare il modulo a 3,3 V. Il cavo I2C verso la custodia esterna può richiedere una frequenza inferiore a 100 kHz se le letture non sono stabili.
+Conviene caricare il firmware con il Pi spento o scollegato, finché non abbiamo verificato cosa fanno i pin durante il reset.
 
-I GPIO WAKE/ALIVE/UART indicati sono configurati nel sorgente, ma non sono stati verificati con misure sulla scheda. Non montare ancora il cablaggio definitivo e non collegare direttamente WAKE ai pad J2.
+### 2.3 Comandi dal monitor
 
-### 2.4 Protocollo UART
+| Comando | Cosa fa |
+|---|---|
+| `w` | wake del Pi; non fa niente se il Pi è già acceso o se l'ultimo wake è di meno di 30 s fa |
+| `r` | misura subito e la mette nel buffer |
+| `s` | stato: boot ID, Pi acceso/spento, BME280, camera, record nel buffer, ora ricevuta dal Pi |
+| `i` | scansione del bus I2C |
+| `h` | aiuto |
 
-L'ESP apre la UART solo mentre ALIVE è alto, per limitare il rischio di alimentare il Pi spento attraverso RXD. L'invio parte dopo `PI_BOOT_DELAY_MS` (60 s), poi si ripete ogni minuto. La riga prodotta dal firmware attuale è:
+In più, con `DIAGNOSTICA 1`:
 
-```text
-BME,<uptime_ms>,<temperatura_C>,<umidita_percento>,<pressione_hPa>
-```
+| Comando | Cosa fa |
+|---|---|
+| `p` | livello delle linee SDA e SCL: dice se il modulo BME280 è collegato e alimentato |
+| `a` | cerca dispositivi I2C su tutte le coppie dei GPIO liberi 14, 21, 38, 39, 40, 47, 48 |
+| `l` | segue ALIVE per 20 s e stampa ogni cambio |
+| `u` | ponte UART: quello che arriva dal Pi va sul monitor e viceversa (`~` per uscire) |
+| `c` | per 10 s stampa la percentuale di immagine cambiata, per tarare le soglie del movimento |
 
-`uptime_ms` è `millis()` al momento dell'invio; non è un timestamp civile né l'età della misura. Il ricevitore sul Pi non è ancora implementato. La velocità UART configurata è 9600 baud; il monitor USB resta a 115200 baud.
+Questi comandi bloccano il firmware per qualche secondo, ed è il motivo per cui non stanno nella versione di campo.
 
-### 2.5 Avvio e comandi di prova
+### 2.4 Il BME280 non viene trovato
 
-Da `firmware/esp32`, usare `pio run -e esp32s3_cam` per compilare, `pio run -e esp32s3_cam -t upload` per caricare e `pio device monitor -b 115200` per il monitor. La scheda ha una porta USB-UART e una USB nativa: usare la porta collegata al convertitore USB-UART per il monitor seriale configurato con `Serial`.
+La scansione I2C che non trova niente su nessun indirizzo, nemmeno scambiando SDA e SCL, vuol dire che il chip non risponde proprio. L'indirizzo (0x76 o 0x77) non c'entra: il firmware prova entrambi. Con `DIAGNOSTICA 1`:
 
-- `w`: richiesta manuale di wake; può azionare J2 se ALIVE è basso.
-- `r`: richiama una misura BME280 e la passa alla funzione di invio; verificare il comportamento UART prima di usarlo con il Pi spento.
+1. `p` controlla le due linee. Con il pulldown interno attivo, una linea collegata a un modulo alimentato legge HIGH perché i pull-up del modulo sono più forti. Se una legge LOW il filo non arriva su quel GPIO, oppure il modulo non è alimentato;
+2. con il multimetro: 3,3 V tra VCC e GND del modulo, continuità da GPIO47 a SDA e da GPIO21 a SCL. Controllare anche le saldature dell'header del modulo, che sui moduli economici spesso arrivano non saldati;
+3. `a` prova tutte le coppie dei GPIO liberi. Se il sensore risponde su un'altra coppia, i fili sono su pin diversi da quelli che pensiamo (succede facilmente leggendo la serigrafia dell'header);
+4. quando risponde, il messaggio all'avvio (o `s`) dice se è un BME280 (chip ID 0x60) o un BMP280 (0x58, senza umidità).
 
-Queste prove vanno eseguite prima con ESP e sensore isolati dal Pi. In seguito verificare con multimetro il segnale ALIVE e il circuito optoisolato, quindi collaudare UART e wake separatamente. La mappa GPIO e l'alimentazione della scheda non sono ancora state validate in hardware.
+### 2.5 Rilevamento del movimento
+
+La camera lavora in scala di grigi a 160×120, un fotogramma ogni mezzo secondo. L'immagine è divisa in 192 blocchi da 10×10 pixel e per ogni blocco si confronta la luminosità media con uno "sfondo" che segue lentamente la scena, così le variazioni graduali di luce non contano. C'è un evento quando cambia almeno il 3% dei blocchi. Sopra il 60% consideriamo che sia cambiata la luce (una nuvola, l'esposizione automatica) e lo sfondo riparte da zero. Un movimento che continua conta come un solo evento ogni 10 s.
+
+Ogni evento finisce nel buffer con la percentuale di blocchi cambiati e un flag che dice se ha acceso il Pi. Sul Pi arriva in `data/camera_events.csv`, e il CSV della foto riporta l'evento che ha causato il wake.
+
+Le soglie sono in cima al file e vanno tarate in campo con il comando `c`. A 160×120 un insetto piccolo lontano dalla camera occupa pochi pixel: è un primo filtro grezzo, che il decider dovrà migliorare.
+
+### 2.6 Collegamento con il Pi
+
+I fili sono in [pinout.md](pinout.md), il protocollo in [protocollo-uart.md](protocollo-uart.md). In breve: l'ESP apre la UART quando ALIVE sale, il Pi chiede i record con `GET` e li conferma con `ACK` dopo averli salvati. I record confermati escono dal buffer, gli altri restano lì.
 
 ---
 
 ## 3. Circuito di risveglio (WAKE → J2)
 
-Lo schema KiCad in [`hardware/pi5->esp32/`](../hardware/pi5-%3Eesp32/circuito.png) è una bozza elettrica del PC817, ma usa un connettore ESP generico e **non rappresenta il pinout della ESP32-S3-CAM fotografata**. Va aggiornato prima di usarlo per cablare la board. I GPIO indicati sotto sono quelli proposti nel firmware, non ancora collaudati:
-
-```
+```text
 ESP GPIO42 ──[330 Ω]──► PC817 pin 1 (anodo LED)
 ESP GND    ───────────► PC817 pin 2 (catodo LED)
-                         PC817 pin 4 (collettore) ──► J2 SIG
-                         PC817 pin 3 (emettitore) ──► J2 GND
+                         PC817 pin 4 (collettore) ──► J2 segnale
+                         PC817 pin 3 (emettitore) ──► J2 massa
 
-Pi GPIO17  ─────────┬──► ESP GPIO1
-                   [10 kΩ]
+Pi GPIO17 ──[1 kΩ]──┬──► ESP GPIO1 (ALIVE)
+                  [10 kΩ]
                     │
 GND comune ─────────┴─── (masse di Pi ed ESP collegate)
 ```
 
-Quando l'ESP porta GPIO42 alto per 200 ms, il LED interno del PC817 si accende, il fototransistor conduce e chiude i due pad J2, proprio come quando si preme il pulsante. Con l'optoisolatore il GPIO dell'ESP non tocca mai direttamente i pad del Pi. La resistenza da 330 Ω limita la corrente del LED a circa 6 mA ((3,3 V − 1,2 V) / 330 Ω).
+Quando l'ESP porta GPIO42 alto per 200 ms il LED del PC817 si accende, il fototransistor conduce e chiude J2 come il pulsante. Il GPIO dell'ESP non tocca mai direttamente i pad del Pi.
 
-Cose da verificare prima di collegarlo al Pi:
+Da verificare prima di collegarlo al Pi:
 
-- quale dei due pad J2 è effettivamente la massa (non darlo per scontato, va misurato);
-- che il PC817 chiuda J2 in modo affidabile con l'impulso da 200 ms;
-- che all'accensione o al reset dell'ESP il GPIO42 resti basso: niente impulsi spuri verso il Pi, e l'ESP parte normalmente (vedi 2.2 e [issues.md #11](../issues.md));
-- che non ci sia back-powering dal GPIO17 quando l'ESP è spento ([issues.md #26](../issues.md)).
+- quale dei due pad J2 è la massa (con il multimetro, a Pi spento);
+- che GPIO42 resti basso durante il reset dell'ESP, altrimenti ogni reset dell'ESP accende (o spegne) il Pi (prova 5);
+- che non ci sia back-powering tra le schede quando una delle due è spenta: ALIVE e la linea Pi TXD → ESP GPIO41 possono alimentare l'ESP spento attraverso i diodi di protezione, e la TX dell'ESP può alimentare il Pi in halt. Per questo ci sono le resistenze da 1 kΩ in serie e il firmware tiene la TX come ingresso finché ALIVE è basso. Si misura con la prova 8 della sezione 4.
 
-Il firmware non manda l'impulso se ALIVE è già alto. Questo però si basa solo sul livello del pin e non è un vero controllo dello stato del Pi.
+Lo schema KiCad in [`hardware/pi5->esp32/`](../hardware/pi5-%3Eesp32/circuito.png) ha ancora un connettore ESP generico e non ha la resistenza da 1 kΩ su ALIVE né le due linee UART: va aggiornato ai collegamenti di [pinout.md](pinout.md) (è nella lista "Da fare" del README).
 
 ---
 
 ## 4. Prove al banco
 
-Procedi nell'ordine e passa alla fase successiva solo quando il risultato atteso è confermato. **Scollega l'alimentazione prima di cambiare i collegamenti**; non collegare GPIO17 al GPIO1 dell'ESP finché la misura ALIVE indicata sotto non è stata fatta. Se una misura o un comportamento non corrisponde a quanto atteso, fermati e controlla schema, pin e configurazione prima di alimentare il circuito successivo.
+Andare in ordine e passare alla prova dopo solo se il risultato è quello atteso. Scollegare l'alimentazione prima di cambiare i collegamenti. Per ogni prova annotare data, pin, alimentazione, misura e risultato (vedi `more.md`, diario delle prove). Finché queste prove non sono fatte, firmware e software del Pi sono stati provati solo in compilazione e su PC.
 
-Annota per ogni prova scheda/revisione, pin, alimentazione, misura e risultato. In particolare, non dare per scontata la massa o la polarità dei pad: verifica sul Pi reale.
+### A. Schede separate
 
-### A. Verifica separata delle schede
+1. Pi da solo. Avviarlo, controllare EEPROM (`rpi-eeprom-config`), `config.txt` e i comandi di 1.2. Fare `sudo halt` e verificare che il pulsante lo riaccenda. Con `timedatectl` controllare che l'ora sia giusta anche dopo aver tolto la rete e riavviato: se non lo è, manca la batteria dell'RTC (1.3).
+2. ALIVE sul Pi. Misurare GPIO17 (pin 11) rispetto a GND con il Pi acceso, durante lo spegnimento e in halt. Ci aspettiamo 3,3 V da acceso e 0 V in halt.
+3. BME280. Caricare il firmware con `DIAGNOSTICA 1`, aprire il monitor e seguire la sezione 2.4 (`p`, `i`, `a`) finché all'avvio non compare "BME280 trovato". Controllare il chip ID: se è 0x58 il modulo è un BMP280 e l'umidità non ci sarà, quindi va comprato un BME280 vero.
+4. Camera. All'avvio deve comparire "Camera pronta". Se compare "Camera non inizializzata", controllare il flat e la tabella dei pin della camera in [pinout.md](pinout.md#3-esp32-s3-cam). Con `c`, muovere una mano davanti alla camera: le righe devono passare da circa 0% a sopra il 3% e segnare "evento".
+5. WAKE al reset. Con l'oscilloscopio su GPIO42, premere RST dell'ESP e togliere e ridare alimentazione: il pin deve restare basso, senza impulsi. Se un impulso c'è, ogni reset dell'ESP accenderebbe il Pi (o lo spegnerebbe se acceso): mettere una resistenza da 10 kΩ tra GPIO42 e GND e ripetere.
+6. PC817 senza Pi. Con l'ESP che manda l'impulso (`w`), misurare in tensione che il transistor del PC817 commuti. Con il multimetro, a Pi spento, trovare quale pad J2 è la massa.
 
-1. **Pi da solo.** Avvia e arresta il Pi; verifica la configurazione EEPROM effettiva e che il pulsante di accensione lo riavvii dall'halt. Non collegare ancora ESP o circuito WAKE.
-2. **ESP da sola: compilazione e caricamento del firmware.** Per queste operazioni lascia la ESP32-S3-CAM scollegata dal Pi e collega via USB solo il convertitore USB-seriale della scheda. Chiudi eventuali altri programmi che stanno usando la stessa porta seriale.
+### B. Schede collegate
 
-   Puoi usare PlatformIO in uno di questi due modi:
+7. Collegare PC817 → J2, ALIVE (con 1 kΩ e 10 kΩ) e massa comune. ESP alimentata per conto suo.
+8. Back-powering. Con il Pi acceso e l'ESP senza alimentazione, misurare il 3V3 dell'ESP: deve restare vicino a 0 V. Se sale sopra qualche centinaio di mV la corrente passa da ALIVE o da GPIO41 attraverso i diodi di protezione: aumentare le resistenze in serie (per esempio 4,7 kΩ) e rimisurare. Poi il contrario: Pi in halt ed ESP accesa, sul pin 10 (RXD) del Pi non deve arrivare tensione.
+9. Con il Pi acceso, comando `l`: ALIVE deve essere HIGH. Comando `w`: deve rifiutarsi di mandare l'impulso.
+10. Con il file `maintenance` presente, `sudo halt`, poi `w`: un solo impulso, il Pi si avvia, ALIVE sale. Il Pi deve restare acceso (il servizio è saltato).
+11. UART. Collegare le due linee con le resistenze da 1 kΩ. Con il comando `u` e `picocom -b 115200 /dev/ttyAMA0` sul Pi, quello che si scrive da una parte deve comparire dall'altra.
+12. Sul Pi: `.venv/bin/python -m smartcam.esp_link` deve scaricare misure ed eventi e scriverli in `data/bme280.csv` e `data/camera_events.csv`; lanciato una seconda volta deve ricevere solo quelli nuovi.
+13. Ciclo completo. `bash raspberry_pi/capture_rpi.sh --oneshot`: una foto, il suo CSV, una riga in `sensors.csv`, le misure nuove in `bme280.csv` e gli eventi nuovi in `camera_events.csv`.
+14. Solo a questo punto: caricare il firmware con `DIAGNOSTICA 0`, abilitare il servizio (1.5), togliere `maintenance` e mettere il Pi in halt. Un movimento davanti alla OV3660 deve accendere il Pi, che fa il ciclo e torna in halt da solo; ALIVE deve tornare basso.
 
-   - **Visual Studio Code:** installa l'estensione *PlatformIO IDE*, apri in VS Code la cartella `firmware/esp32` (quella che contiene `platformio.ini`) e attendi che PlatformIO installi la piattaforma ESP32 e le librerie. Nella barra di PlatformIO seleziona l'ambiente `esp32s3_cam`; usa **Build** per compilare e **Upload** per scrivere il firmware nella memoria flash della scheda. Il terminale integrato è un'alternativa ai pulsanti dell'interfaccia.
-   - **Terminale:** installa PlatformIO Core, che fornisce il comando `pio`, apri un terminale nella root del repository e usa:
+### C. Sensori del Pi
 
-```bash
-cd firmware/esp32                            # entra nella cartella con platformio.ini
-pio run                                      # compila e installa le dipendenze necessarie
-pio run -t upload                            # compila e carica il firmware nella ESP32 (con il Pi spento, vedi 2.3)
-```
+Da fare quando avremo i modelli definitivi.
 
-`pio run` controlla il codice e produce il firmware; `pio run -t upload` lo trasferisce nella memoria flash della scheda. Il file generato si trova in `.pio/build/esp32s3_cam/firmware.bin`, ma normalmente non occorre selezionarlo o copiarlo: è PlatformIO a caricarlo. Attendi il messaggio di caricamento completato prima di scollegare la USB. Se la board di collegamento è già montata, carica il firmware **con il Pi spento** o con la board staccata: carica con il circuito Pi–ESP scollegato finché il comportamento dei pin di boot non è verificato (vedi 2.3).
+15. Sensore acqua. Bagnare il contatto e lanciare `.venv/bin/python -m smartcam.sensors`: `water_present` deve essere 1, e 0 con il contatto asciutto.
+16. Umidità del suolo, calibrazione. Con la sonda all'aria lanciare `.venv/bin/python -m smartcam.sensors --calibra-suolo` e scrivere la media in `volt_dry` (`SENSORS` in `sensors.py`). Ripetere con la sonda in un bicchiere d'acqua fino alla linea indicata sulla scheda e scrivere la media in `volt_wet`. Da quel momento `soil_moisture_percent` viene calcolata.
+17. Metano. Prima di collegarlo all'MCP3008, misurare con il multimetro l'uscita del partitore (10 kΩ + 18 kΩ, vedi [pinout.md](pinout.md)) con il modulo alimentato: non deve superare 3,3 V. Poi controllare che `methane_voltage` nel CSV corrisponda alla tensione misurata direttamente su AO.
 
-Se PlatformIO non trova la porta, individua quella assegnata dal sistema e specificala esplicitamente. È spesso `/dev/ttyUSB0` o `/dev/ttyACM0` su Linux, `COM3` (o un altro `COM`) su Windows e `/dev/cu.usbserial-...` su macOS:
+### D. In campo
 
-```bash
-pio run -t upload --upload-port /dev/ttyUSB0
-```
-
-Sostituisci l'esempio con la porta effettiva. Per il primo caricamento, o se l'upload si blocca su "Connecting", questa ESP32-S3-CAM potrebbe richiedere la modalità bootloader: collega GPIO0 a GND, premi e rilascia RESET (o togli e ridai alimentazione), avvia l'upload e, quando inizia il trasferimento, rilascia GPIO0 da GND. Se il convertitore ha pulsanti `BOOT` e `RST/RESET`, in genere si ottiene lo stesso risultato tenendo premuto `BOOT`, premendo e rilasciando `RST`, poi rilasciando `BOOT` quando parte il caricamento. La sequenza può dipendere dal convertitore. A upload concluso, **rimuovi ogni collegamento GPIO0-GND e riavvia**.
-
-3. **Apri il monitor seriale.** Dopo l'upload, avvia il monitor a 115200 baud per vedere i messaggi del firmware:
-
-```bash
-pio device monitor
-# Se necessario, indica anche qui la porta:
-pio device monitor --port /dev/ttyUSB0
-```
-
-Con l'estensione VS Code puoi usare l'azione **Monitor** di PlatformIO, impostata a 115200 baud (`monitor_speed` è già configurato in `platformio.ini`). Per chiudere il monitor da terminale, premi `Ctrl+C`; la porta deve essere libera per fare un nuovo upload.
-
-All'avvio il log dovrebbe mostrare l'esito dell'inizializzazione BME280 e la riga `Pin ESP32-S3-CAM: ...` con i GPIO configurati.
-
-Il comando seriale `w` seguito da Invio richiede immediatamente un wake. Provalo solo dopo avere completato le verifiche elettriche e collegato correttamente il circuito: se ALIVE risulta basso, il firmware aziona WAKE. Con Pi acceso e ALIVE alto, il log deve invece mostrare che l'impulso viene saltato.
-
-Il comando `r` richiama una misura del BME280; nel sorgente attuale `sendReading()` scrive anche sulla UART, quindi provarlo con il Pi scollegato. Il bus I2C è configurato sui GPIO47 (SDA) e 48 (SCL). Il rilevamento con la camera non è implementato.
-
-### B. Prove separate, ESP non collegata al Pi
-
-4. **Alimentazione indipendente.** Verifica che ESP e BME restino alimentati mentre il Pi è in halt. Il Pi può spegnere le proprie uscite in questa condizione: non alimentare l'ESP dal GPIO del Pi.
-5. **Misura ALIVE sul solo Pi.** Con il Pi acceso, misura GPIO17 rispetto a GND e annota il valore. Ripeti dopo `sudo halt`, lasciando collegata l'alimentazione, e annota anche quel valore. Il GPIO si configura alto durante il boot, ma non assumere che mantenga quel livello in halt. Se misuri tensione inattesa o instabile, non collegarlo all'ESP: ricontrolla configurazione e cablaggio. Solo dopo questa verifica prepara il collegamento GPIO17→GPIO1 dell'ESP con pulldown da 10 kΩ e massa comune, a schede spente.
-6. **Prova isolatore scollegato dal Pi.** Alimenta il lato LED con una sorgente da banco a bassa tensione e corrente limitata, rispettando la resistenza da 330 Ω; verifica che il transistor del PC817 commuti e che torni aperto quando togli il comando. Misura la commutazione in tensione: non usare la modalità continuità/resistenza su un circuito alimentato. Con l'oscilloscopio controlla anche che il GPIO42 (WAKE) resti basso durante il reset dell'ESP. Identifica con il multimetro, a Pi spento, quale pad J2 è GND. Non collegare ancora i fili a J2.
-
-### C. Prova integrata
-
-7. Collega l'uscita isolata del PC817 ai pad J2 identificati, poi collega ALIVE già verificato. Mantieni l'ESP alimentato indipendentemente. Controlla a vista che non ci siano corti o fili scambiati prima di riaccendere.
-8. Con il Pi **acceso**, apri il monitor seriale e invia `w` seguito da Invio. Il log deve indicare `ALIVE HIGH` e non deve esserci impulso su WAKE. Se il log indica `ALIVE LOW`, interrompi la prova e ricontrolla il segnale prima di lasciare che l'ESP chiuda J2.
-9. Metti il Pi in halt lasciando alimentata l'ESP e invia `w`. Verifica il singolo impulso breve (200 ms), l'avvio del Pi e il passaggio di ALIVE al livello misurato durante il boot. Se il Pi non si avvia o ALIVE non cambia come previsto, interrompi e ricontrolla; non ripetere impulsi alla cieca. ALIVE segnala solo il livello GPIO, non che Linux abbia completato l'avvio.
-10. **UART.** Collega il TX dell'ESP (GPIO2, con la resistenza da 1 kΩ) al RXD del Pi e apri `picocom -b 9600 /dev/ttyAMA0` sul Pi (vedi 2.5). Dopo il ritardo di 60 s arriva una riga `BME,uptime,temp,umidita,pressione`, poi una riga al minuto. Con il Pi in halt, misura che sul pin RXD del Pi non arrivi tensione dall'ESP.
-11. La camera OV3660 è montata sulla scheda, ma il firmware attuale non la inizializza; la prova di acquisizione e il rilevamento restano da implementare.
-12. **Solo dopo il collaudo del ciclo completo**, abilita il servizio di scatto di §1 e verifica una foto, la lettura sensori e lo spegnimento previsto. Non abilitarlo durante prove o raccolta continua: spegne il Pi a ogni avvio.
-
----
-
-## 5. Sensori sul Pi
-
-Secondo il piano GPS, sensore acqua, umidità del suolo e metano vanno sul Pi, mentre il BME280 va solo sull'ESP. Le interfacce previste sono UART per il GPS, ADC (MCP3008 su SPI) per i sensori analogici e GPIO per gli ingressi digitali. Dipendono però dai modelli che compreremo. I pin in `raspberry_pi/smartcam/sensors.py` sono solo un esempio.
-
-Il flusso `--oneshot` fa una foto, legge i sensori una volta e termina, così il servizio può spegnere il Pi. La modalità continuativa (cadenze diverse per foto e misure, fascia oraria, database) non è ancora implementata.
+18. Taratura del movimento. Con `DIAGNOSTICA 1` e la camera puntata sulla scena vera, usare `c` a diverse ore del giorno. Le soglie in cima a `main.ino` vanno scelte in modo che il passaggio di un insetto superi `SOGLIA_MIN_PERCENTO` e il vento sulle foglie no. Dopo qualche giorno di raccolta, confrontare `camera_events.csv` con le foto per contare i wake inutili.
+19. Consumi. Misurare la corrente dell'ESP con la camera accesa e quella del Pi nelle varie fasi (halt, avvio, scatto, spegnimento), come chiede il piano per lo studio energetico.

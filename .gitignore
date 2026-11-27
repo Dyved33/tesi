@@ -8,4 +8,9 @@ __pycache__/
 .vscode/ipch
 .venv/
 .env.systemd
-firmware/esp32/src/.Rhistory
+
+# dati raccolti sul Pi (foto e CSV)
+raspberry_pi/data/
+
+# cronologia locale di VS Code (estensione Local History)
+.history/

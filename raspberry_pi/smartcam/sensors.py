@@ -1,392 +1,273 @@
 #!/usr/bin/env python3
-"""Legge una volta tutti i sensori abilitati sul Pi e aggiunge una riga al CSV.
+"""Legge una volta tutti i sensori collegati al Pi e aggiunge una riga a data/sensors.csv.
 
 I sensori vengono letti uno dopo l'altro (un "burst"), non nello stesso
-istante. Alla fine si aggiunge una riga a ``raspberry_pi/data/sensors.csv`` e
-lo script termina. Il timestamp della riga è il momento in cui la riga viene
-composta, quindi i singoli sensori possono essere stati letti qualche secondo
-prima.
+istante: per questo la riga ha l'ora di inizio e di fine del burst, più l'ora
+del fix GPS. Il BME280 non è qui: è collegato all'ESP32 e le sue misure
+arrivano con ``esp_link`` in un file a parte.
 
-Secondo plan.pdf il BME280 è collegato SOLO all'ESP32 (nella sua custodia
-esterna): le colonne BME nel CSV servono per i dati che arriveranno dall'ESP;
-leggerlo via I2C dal Pi ha senso solo al banco.
-
-Per adattarlo al proprio cablaggio basta modificare il dizionario SENSORS.
-Per ogni sensore c'è una funzione "principale" più alcune alternative
-(altra libreria, oppure dummy) selezionabili con la chiave "library".
+Per adattare lo script al cablaggio basta modificare il dizionario SENSORS.
+Con ``"dummy": True`` un sensore non viene letto (serve per provare il resto
+senza hardware) e finisce nella colonna ``sensors_dummy``; uno che va in
+errore finisce in ``sensors_failed``. Solo i sensori letti davvero finiscono
+in ``sensors_ok``.
 
 Si lancia come modulo, dalla cartella raspberry_pi/::
 
-    python3 -m smartcam.sensors
+    python3 -m smartcam.sensors                  # una lettura, una riga nel CSV
+    python3 -m smartcam.sensors --calibra-suolo  # tensione media della sonda del suolo
 """
 # Provenienza:
-# - Il dizionario di configurazione, il meccanismo di scelta delle alternative
-#   (read_sensor_with_fallback) e la scrittura del CSV sono scritti da noi.
-# - Il GPS è letto con gps_reader.py di questo package (fonte: pynmea2).
-#   Il BME280 è collegato all'ESP32 e non viene letto da questo script.
+# - Il dizionario di configurazione, il ciclo di lettura e il formato del CSV
+#   sono scritti da noi.
 # - read_adc() usa la classe MCP3008 di gpiozero (licenza BSD), preinstallata
 #   su Raspberry Pi OS: https://gpiozero.readthedocs.io/en/stable/api_spi.html#mcp3008
-#   Sostituisce due versioni precedenti: una adattata dall'esempio Adafruit
-#   MCP3xxx (con il chip select sbagliato) e lo snippet spidev "a mano" dei
-#   tutorial, che restituiva un tipo diverso e mandava in crash lo script.
-# - read_water() e le varianti gpio_digital usano DigitalInputDevice come da
-#   documentazione gpiozero: https://gpiozero.readthedocs.io/en/stable/api_input.html
-# - Le varianti RPi.GPIO seguono gli esempi base della libreria:
-#   https://sourceforge.net/p/raspberry-gpio-python/wiki/Inputs/
+# - Gli ingressi digitali usano DigitalInputDevice come da documentazione
+#   gpiozero: https://gpiozero.readthedocs.io/en/stable/api_input.html
+# - Le vecchie varianti con RPi.GPIO sono state tolte: RPi.GPIO non funziona
+#   sul Pi 5 (il GPIO passa dal chip RP1), gpiozero invece sì.
 
-import csv
-import os
+import logging
 import sys
-from datetime import datetime, timezone
+import time
 
+from . import config
 from .gps_reader import get_gps_fix
+from .storage import append_rows, clock_synced, iso, utc_now
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# CONFIGURAZIONE: da adattare al cablaggio e ai modelli di sensore reali.
-# "enabled" dice se leggere il sensore, "library" quale implementazione usare.
-# I pin qui sotto sono esempi: NON sono il cablaggio di campo verificato.
+# CONFIGURAZIONE: da adattare ai modelli di sensore che compreremo.
+# I pin sono quelli di docs/pinout.md (numerazione BCM).
 # ---------------------------------------------------------------------------
 SENSORS = {
-    # GPS: frasi NMEA sulla seriale (UART)
+    # GPS su UART2 (GPIO4/GPIO5)
     "gps": {
-        "enabled": True,
-        "port": "/dev/ttyAMA0",   # oppure /dev/ttyS0, o /dev/ttyUSB0 per i GPS USB
-        "baudrate": 9600,
-        "timeout_s": 5,           # secondi massimi di attesa per un fix
-        "library": "pyserial",    # pyserial | dummy
+        "dummy": False,
+        "port": config.GPS_PORT,
+        "baudrate": config.GPS_BAUD,
+        "timeout_s": 5,
     },
-    # Presenza d'acqua: galleggiante o sonda conduttiva su un ingresso digitale (GPIO)
+    # Presenza d'acqua: galleggiante o sonda conduttiva su un ingresso digitale
     "water": {
-        "enabled": True,
-        "pin": 27,                # numero GPIO (BCM), da adattare al cablaggio
+        "dummy": False,
+        "pin": 27,
         "pull_up": True,          # True se il contatto chiude verso GND quando è bagnato
-        "library": "gpiozero",    # gpiozero | rpigpio | dummy
     },
-    # Umidità del suolo: sensore analogico, serve un ADC esterno (MCP3008 su SPI)
+    # Umidità del suolo: sonda analogica sul canale 0 dell'MCP3008
     "soil_moisture": {
-        "enabled": True,
-        "interface": "adc",       # adc | gpio_digital | dummy
-        # Impostazioni ADC (MCP3008):
-        "adc_chip": 0,            # chip select hardware: 0 = CE0 (GPIO8), 1 = CE1 (GPIO7)
-        "adc_channel": 0,         # canale dell'MCP3008, da 0 a 7
-        "adc_vref": 3.3,          # tensione su VREF dell'MCP3008
-        # Alternativa digitale, se il modulo ha un'uscita DO a soglia:
-        "gpio_pin": 22,
-        "gpio_wet_level": False,  # livello di DO che significa "bagnato"
-        "library": "gpiozero",    # gpiozero | dummy
+        "dummy": False,
+        "interface": "adc",       # adc | digital (uscita DO a soglia del modulo)
+        "adc_device": 0,          # chip select: 0 = CE0 (GPIO8), 1 = CE1 (GPIO7)
+        "adc_channel": 0,
+        "adc_vref": 3.3,          # tensione collegata a VREF dell'MCP3008
+        # Tensioni misurate con la sonda in aria e in acqua: servono a
+        # calcolare la percentuale. Finché non le misuriamo restano None e la
+        # percentuale non viene scritta.
+        "volt_dry": None,
+        "volt_wet": None,
+        "digital_pin": 22,
+        "digital_wet_level": False,  # livello di DO che significa "bagnato"
     },
-    # Metano, sensori della serie MQ (es. MQ-4 / MQ-2): analogico via ADC, con uscita digitale DO opzionale
+    # Metano, serie MQ (MQ-4): analogico sul canale 1 dell'MCP3008
     "methane": {
-        "enabled": True,
-        "interface": "adc",       # adc | gpio_digital | dummy
-        "adc_chip": 0,
+        "dummy": False,
+        "interface": "adc",       # adc | digital
+        "adc_device": 0,
         "adc_channel": 1,
         "adc_vref": 3.3,
-        "gpio_pin": 23,
-        "gpio_alarm_level": True, # livello di DO che significa "allarme"
-        "library": "gpiozero",    # gpiozero | dummy
+        # Il modulo MQ-4 va alimentato a 5 V e la sua uscita arriva a 5 V,
+        # mentre l'MCP3008 con VREF a 3,3 V legge al massimo 3,3 V. Tra AO e
+        # CH1 c'è un partitore: R_top in serie, R_bottom verso GND.
+        # Con 10 kΩ e 18 kΩ i 5 V diventano 5 * 18 / 28 = 3,21 V.
+        # Il codice moltiplica per (R_top + R_bottom) / R_bottom per salvare
+        # la tensione vera del sensore. Senza partitore: divider_r_top = 0.
+        "divider_r_top": 10_000,
+        "divider_r_bottom": 18_000,
+        "digital_pin": 23,             # anche DO è a 5 V: stesso partitore
+        "digital_alarm_level": True,   # livello di DO che significa "allarme"
     },
 }
 
-# Il CSV sta in raspberry_pi/data/ (la cartella sopra questo package).
-# L'ordine delle colonne è fisso: le righe vecchie restano leggibili anche se
-# un sensore viene disabilitato.
-CSV_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "sensors.csv"
-)
-CSV_HEADER = [
-    "timestamp_iso",
-    "bme280_temperature_c",
-    "bme280_humidity_pct",
-    "bme280_pressure_hpa",
+SENSORS_HEADER = [
+    "sensors_clock_synced",
+    "sensors_started_at_utc",
+    "sensors_finished_at_utc",
+    "gps_measured_at_utc",
     "gps_latitude",
     "gps_longitude",
     "gps_altitude_m",
     "gps_satellites",
-    "water_present_bool",
+    "gps_fix_quality",
+    "gps_hdop",
+    "water_present",
     "soil_moisture_voltage",
     "soil_moisture_percent",
+    "soil_wet",
     "methane_voltage",
-    "methane_ppm_approx",
+    "methane_alarm",
     "sensors_ok",
+    "sensors_dummy",
     "sensors_failed",
+    "sensors_errors",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Funzioni di utilità
-# ---------------------------------------------------------------------------
-def now_iso() -> str:
-    """Timestamp della riga in UTC, formato ISO-8601."""
-    return datetime.now(timezone.utc).isoformat()
-
-
-def ensure_csv() -> None:
-    """Crea cartella e intestazione del CSV, ma solo se il file non esiste ancora."""
-    os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
-    if not os.path.exists(CSV_PATH):
-        with open(CSV_PATH, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(CSV_HEADER)
-
-
-def append_row(row: dict) -> None:
-    """Aggiunge una riga; le colonne senza valore in questo giro restano vuote.
-
-    Le chiavi che non sono nell'intestazione vengono ignorate.
-    """
-    ensure_csv()
-    with open(CSV_PATH, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_HEADER)
-        writer.writerow({k: row.get(k, "") for k in CSV_HEADER})
-
-
-# ---------------------------------------------------------------------------
-# Lettura dei sensori: per ognuno la versione principale e le alternative
+# Letture. Ogni funzione restituisce le colonne del CSV che le competono.
 # ---------------------------------------------------------------------------
 
 def read_gps() -> dict:
-    """Legge una posizione tramite gps_reader.
-
-    Nessun fix entro il timeout non è un errore: si restituiscono campi vuoti.
-    """
     cfg = SENSORS["gps"]
     fix = get_gps_fix(cfg["port"], cfg["baudrate"], cfg["timeout_s"])
-    return fix or read_gps_dummy()
+    if not fix:
+        return {}  # nessun fix: colonne vuote, ma il sensore ha funzionato
+    return {
+        "gps_measured_at_utc": fix["measured_at_utc"],
+        "gps_latitude": fix["latitude"],
+        "gps_longitude": fix["longitude"],
+        "gps_altitude_m": fix["altitude_m"],
+        "gps_satellites": fix["satellites"],
+        "gps_fix_quality": fix["fix_quality"],
+        "gps_hdop": fix["hdop"],
+    }
 
 
-def read_gps_dummy() -> dict:
-    """Dummy del GPS: nessun fix."""
-    return {"latitude": None, "longitude": None, "altitude": None, "satellites": None}
+def read_digital(pin: int, pull_up: bool | None = None) -> bool:
+    """True se il pin è "attivo".
 
-
-def read_water() -> dict:
-    """Legge il sensore d'acqua; l'idea è che livello basso = bagnato.
-
-    ATTENZIONE: con pull_up=True gpiozero inverte già il valore (value = 1
-    quando il pin è basso), quindi il "not" qui sotto inverte una seconda
-    volta e il risultato esce al contrario. Vedi issues.md.
+    Con pull_up=True gpiozero considera attivo il livello basso, con
+    pull_up=False il livello alto: non serve invertire a mano il valore.
+    pull_up=None lascia il pin senza resistenza interna (il modulo ne ha una
+    sua) e allora attivo = alto.
     """
     from gpiozero import DigitalInputDevice
 
-    pin = SENSORS["water"]["pin"]
-    pull_up = SENSORS["water"]["pull_up"]
-    sensor = DigitalInputDevice(pin, pull_up=pull_up)
-    wet = not sensor.value
-    sensor.close()
-    return {"present": wet}
+    if pull_up is None:
+        dev = DigitalInputDevice(pin, pull_up=None, active_state=True)
+    else:
+        dev = DigitalInputDevice(pin, pull_up=pull_up)
+    try:
+        return dev.is_active
+    finally:
+        dev.close()
 
 
-# ============================================================
-# ALTERNATIVA acqua: RPi.GPIO, legge il livello "grezzo" del pin.
-# Qui il "not" è corretto: GPIO.input restituisce 0 quando il pin è basso.
-# ============================================================
+def read_adc(channel: int, device: int = 0, vref: float = 3.3) -> float:
+    """Tensione di un canale dell'MCP3008, in volt.
 
-def read_water_rpigpio() -> dict:
-    import RPi.GPIO as GPIO
-
-    pin = SENSORS["water"]["pin"]
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP if SENSORS["water"]["pull_up"] else GPIO.PUD_DOWN)
-    wet = not GPIO.input(pin)
-    GPIO.cleanup()
-    return {"present": wet}
-
-
-def read_water_dummy() -> dict:
-    """Dummy del sensore d'acqua."""
-    return {"present": None}
-
-
-def read_adc(channel: int, chip: int = 0, vref: float = 3.3) -> float:
-    """Legge la tensione di un canale dell'MCP3008 con gpiozero.
-
-    ``chip`` è il chip select hardware (0 = CE0, 1 = CE1). gpiozero usa lo SPI
-    hardware se è abilitato (raspi-config -> Interface -> SPI), altrimenti
-    ripiega su uno SPI software più lento.
-    Fonte: documentazione gpiozero, classe MCP3008 (vedi intestazione).
+    gpiozero usa lo SPI hardware se è abilitato (raspi-config -> Interface
+    Options -> SPI), altrimenti uno SPI software più lento.
     """
     from gpiozero import MCP3008
 
-    # .value è la lettura normalizzata tra 0 e 1; .voltage la moltiplica per
-    # max_voltage, che deve essere la tensione collegata a VREF.
-    adc = MCP3008(channel=channel, device=chip, max_voltage=vref)
+    adc = MCP3008(channel=channel, device=device, max_voltage=vref)
     try:
         return round(adc.voltage, 4)
     finally:
         adc.close()
 
 
+def read_water() -> dict:
+    cfg = SENSORS["water"]
+    return {"water_present": read_digital(cfg["pin"], cfg["pull_up"])}
+
+
 def read_soil_moisture() -> dict:
-    """Restituisce la tensione del sensore di suolo e una percentuale "a occhio".
-
-    La percentuale è una semplice proporzione lineare sulla tensione, NON
-    calibrata: va presa solo come indicazione.
-    """
     cfg = SENSORS["soil_moisture"]
-    if cfg["interface"] == "adc":
-        voltage = read_adc(cfg["adc_channel"], cfg["adc_chip"], cfg["adc_vref"])
-        # Ipotesi: 0 V = secco, 3,3 V = saturo. Molti sensori capacitivi fanno
-        # il contrario (tensione alta = secco): va verificato sulla sonda reale.
-        percent = None
-        if voltage is not None:
-            percent = max(0.0, min(100.0, (voltage / cfg["adc_vref"]) * 100.0))
-        return {"voltage": voltage, "percent": percent}
-    elif cfg["interface"] == "gpio_digital":
-        from gpiozero import DigitalInputDevice
-        pin = DigitalInputDevice(cfg["gpio_pin"], pull_up=False)
-        wet = pin.value == SENSORS["soil_moisture"]["gpio_wet_level"]
-        pin.close()
-        return {"voltage": None, "percent": None, "wet_bool": wet}
-    return {"voltage": None, "percent": None}
+    if cfg["interface"] == "digital":
+        level = read_digital(cfg["digital_pin"], None)
+        return {"soil_wet": level == cfg["digital_wet_level"]}
 
-
-# ============================================================
-# ALTERNATIVA suolo: solo soglia digitale (uscita DO del modulo) con RPi.GPIO.
-# Al momento il dispatcher non la richiama mai.
-# ============================================================
-
-def read_soil_moisture_gpio() -> dict:
-    import RPi.GPIO as GPIO
-
-    pin = SENSORS["soil_moisture"]["gpio_pin"]
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(pin, GPIO.IN)
-    wet = GPIO.input(pin) == SENSORS["soil_moisture"]["gpio_wet_level"]
-    GPIO.cleanup()
-    return {"voltage": None, "percent": None, "wet_bool": wet}
-
-
-def read_soil_moisture_dummy() -> dict:
-    """Dummy del sensore di suolo."""
-    return {"voltage": None, "percent": None}
+    voltage = read_adc(cfg["adc_channel"], cfg["adc_device"], cfg["adc_vref"])
+    percent = None
+    dry, wet = cfg["volt_dry"], cfg["volt_wet"]
+    if dry is not None and wet is not None and dry != wet:
+        # Retta per i due punti di calibrazione. Funziona sia per le sonde in
+        # cui la tensione sale con l'acqua sia per quelle in cui scende.
+        percent = round(max(0.0, min(100.0, (voltage - dry) / (wet - dry) * 100.0)), 1)
+    return {"soil_moisture_voltage": voltage, "soil_moisture_percent": percent}
 
 
 def read_methane() -> dict:
-    """Restituisce la tensione del sensore di metano (o l'allarme digitale).
-
-    I ppm non vengono calcolati: servirebbe la calibrazione del sensore.
-    """
     cfg = SENSORS["methane"]
-    if cfg["interface"] == "adc":
-        voltage = read_adc(cfg["adc_channel"], cfg["adc_chip"], cfg["adc_vref"])
-        # Per i sensori MQ i ppm si ottengono dal rapporto Rs/R0, dove R0 si
-        # misura in aria pulita durante la calibrazione. Finché non la facciamo
-        # restituiamo solo la tensione.
-        return {"voltage": voltage, "ppm": None}
-    elif cfg["interface"] == "gpio_digital":
-        from gpiozero import DigitalInputDevice
-        pin = DigitalInputDevice(cfg["gpio_pin"], pull_up=False)
-        alarm = pin.value == SENSORS["methane"]["gpio_alarm_level"]
-        pin.close()
-        return {"voltage": None, "ppm": None, "alarm_bool": alarm}
-    return {"voltage": None, "ppm": None}
+    if cfg["interface"] == "digital":
+        level = read_digital(cfg["digital_pin"], None)
+        return {"methane_alarm": level == cfg["digital_alarm_level"]}
+    # I ppm si ricavano dal rapporto Rs/R0, con R0 misurata in aria pulita:
+    # finché non calibriamo il sensore salviamo solo la tensione.
+    adc_voltage = read_adc(cfg["adc_channel"], cfg["adc_device"], cfg["adc_vref"])
+    factor = (cfg["divider_r_top"] + cfg["divider_r_bottom"]) / cfg["divider_r_bottom"]
+    return {"methane_voltage": round(adc_voltage * factor, 4)}
 
 
-# ============================================================
-# ALTERNATIVA metano: uscita digitale DO con RPi.GPIO.
-# Al momento il dispatcher non la richiama mai.
-# ============================================================
-
-def read_methane_gpio() -> dict:
-    import RPi.GPIO as GPIO
-
-    pin = SENSORS["methane"]["gpio_pin"]
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(pin, GPIO.IN)
-    alarm = GPIO.input(pin) == SENSORS["methane"]["gpio_alarm_level"]
-    GPIO.cleanup()
-    return {"voltage": None, "ppm": None, "alarm_bool": alarm}
+READERS = {
+    "gps": read_gps,
+    "water": read_water,
+    "soil_moisture": read_soil_moisture,
+    "methane": read_methane,
+}
 
 
-def read_methane_dummy() -> dict:
-    """Dummy del sensore di metano."""
-    return {"voltage": None, "ppm": None}
+def read_all() -> dict:
+    """Legge tutti i sensori e restituisce una riga con le colonne di SENSORS_HEADER."""
+    row = {"sensors_clock_synced": clock_synced(), "sensors_started_at_utc": iso(utc_now())}
+    ok, dummy, failed, errors = [], [], [], []
+
+    for name, reader in READERS.items():
+        if SENSORS[name]["dummy"]:
+            dummy.append(name)
+            continue
+        try:
+            row.update(reader())
+            ok.append(name)
+        except Exception as exc:
+            failed.append(name)
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+            logger.warning("Lettura di %s fallita: %s", name, exc)
+
+    row["sensors_finished_at_utc"] = iso(utc_now())
+    row["sensors_ok"] = ",".join(ok)
+    row["sensors_dummy"] = ",".join(dummy)
+    row["sensors_failed"] = ",".join(failed)
+    row["sensors_errors"] = " | ".join(errors)
+    return row
 
 
-# ---------------------------------------------------------------------------
-# Scelta dell'implementazione in base a SENSORS[...]["library"]
-# ---------------------------------------------------------------------------
+def read_and_save() -> dict:
+    """Legge i sensori, aggiunge la riga a sensors.csv e la restituisce."""
+    row = read_all()
+    append_rows(config.SENSORS_CSV, SENSORS_HEADER, [row])
+    return row
 
-def read_sensor_with_fallback(name: str, primary, alternatives: dict) -> tuple:
-    """Esegue l'implementazione scelta; se va in errore ripiega sul dummy.
 
-    Se "library" non è tra le alternative si usa la funzione principale.
-    ATTENZIONE: quando si ripiega sul dummy il sensore viene comunque contato
-    come "ok", anche se non ha misurato niente (vedi issues.md).
+def calibrate_soil(samples: int = 10) -> float:
+    """Media di ``samples`` letture della sonda del suolo, una ogni mezzo secondo.
+
+    Si usa due volte: con la sonda all'aria (il valore va in ``volt_dry``) e
+    con la sonda in un bicchiere d'acqua fino alla linea indicata sulla
+    scheda (il valore va in ``volt_wet``).
     """
-    lib = SENSORS[name].get("library", "primary")
-    try:
-        if lib in alternatives:
-            return alternatives[lib](), True
-        return primary(), True
-    except Exception as exc:
-        # Ultima spiaggia: il dummy, se esiste per questo sensore.
-        if "dummy" in alternatives:
-            try:
-                return alternatives["dummy"](), True
-            except Exception:
-                pass
-        print(f"[WARN] {name} read failed: {exc}", file=sys.stderr)
-        return {"error": str(exc)}, False
+    cfg = SENSORS["soil_moisture"]
+    values = []
+    for _ in range(samples):
+        values.append(read_adc(cfg["adc_channel"], cfg["adc_device"], cfg["adc_vref"]))
+        time.sleep(0.5)
+    mean = sum(values) / len(values)
+    print(f"min {min(values):.4f} V, max {max(values):.4f} V, media {mean:.4f} V")
+    return mean
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main() -> int:
-    """Legge i sensori abilitati, scrive la riga nel CSV e segnala quelli falliti.
-
-    Exit code 0 se nessun sensore è fallito, 1 altrimenti.
-    """
-    results = {}
-    ok_list = []
-    fail_list = []
-
-    # Ogni voce: nome del sensore, funzione principale, alternative.
-    readers = [
-        ("gps", read_gps, {"dummy": read_gps_dummy}),
-        ("water", read_water, {"rpigpio": read_water_rpigpio, "dummy": read_water_dummy}),
-        ("soil_moisture", read_soil_moisture, {"dummy": read_soil_moisture_dummy}),
-        ("methane", read_methane, {"dummy": read_methane_dummy}),
-    ]
-    for name, primary, alternatives in readers:
-        if not SENSORS[name]["enabled"]:
-            continue
-        data, ok = read_sensor_with_fallback(name, primary, alternatives)
-        results[name] = data
-        (ok_list if ok else fail_list).append(name)
-
-    # Compone la riga con lo schema fisso del CSV. I sensori non letti restano
-    # vuoti; il timestamp è quello della riga, non delle singole misure.
-    row = {"timestamp_iso": now_iso(), "sensors_ok": ",".join(ok_list), "sensors_failed": ",".join(fail_list)}
-
-    # Le colonne BME280 restano nello schema CSV per i dati che saranno
-    # trasferiti dall'ESP32; sensors.py non accede al sensore sul Pi.
-
-    g = results.get("gps", {})
-    row["gps_latitude"] = g.get("latitude")
-    row["gps_longitude"] = g.get("longitude")
-    row["gps_altitude_m"] = g.get("altitude")
-    row["gps_satellites"] = g.get("satellites")
-
-    w = results.get("water", {})
-    row["water_present_bool"] = w.get("present")
-
-    s = results.get("soil_moisture", {})
-    row["soil_moisture_voltage"] = s.get("voltage")
-    row["soil_moisture_percent"] = s.get("percent")
-
-    m = results.get("methane", {})
-    row["methane_voltage"] = m.get("voltage")
-    row["methane_ppm_approx"] = m.get("ppm")
-
-    append_row(row)
-
-    print(f"[sensors] Wrote row to {CSV_PATH}")
-    print(f"[sensors] OK: {ok_list} | FAILED: {fail_list}")
-    return 0 if not fail_list else 1
+    logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
+    if "--calibra-suolo" in sys.argv:
+        calibrate_soil()
+        return 0
+    row = read_and_save()
+    print(f"Riga scritta in {config.SENSORS_CSV}")
+    print(f"ok: {row['sensors_ok']} | dummy: {row['sensors_dummy']} | falliti: {row['sensors_failed']}")
+    return 1 if row["sensors_failed"] else 0
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
-# Unità systemd per l'app selettiva: al boot (dopo il wake dall'ESP) fa
-# una foto + lettura sensori e poi spegne il Pi (halt).
+# Unità systemd per l'app selettiva: al boot (dopo il wake dall'ESP) fa una
+# foto, scarica misure ed eventi dall'ESP, legge i sensori e poi spegne il Pi
+# (halt). Lo spegnimento a fine ciclo è voluto.
 # Utente e percorsi sono quelli del nostro Pi (rpi5-03): vanno adattati.
-# Documentazione: ../../docs/setup-risveglio.md
+# Documentazione: docs/setup-risveglio.md
 #
 # Provenienza: scritta da noi seguendo la documentazione di systemd:
 # https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html
@@ -11,23 +12,22 @@
 #
 # Note sulle direttive:
 # - SuccessAction/FailureAction=poweroff: il Pi si spegne SEMPRE alla fine,
-#   sia se lo scatto riesce sia se fallisce o va in timeout. Nell'app
+#   sia se il ciclo riesce sia se fallisce o va in timeout. Nell'app
 #   selettiva un Pi rimasto acceso per un errore consumerebbe energia
 #   finché qualcuno non interviene.
-# - TimeoutStartSec: se lo script si blocca (camera, GPS, ...) dopo questo
-#   tempo systemd lo termina e l'unità risulta fallita, quindi il Pi si spegne.
-#   Con Type=oneshot, se non lo si imposta, il timeout è disattivato.
+# - TimeoutStartSec: se lo script si blocca dopo questo tempo systemd lo
+#   termina e il Pi si spegne. Con Type=oneshot, se non lo si imposta, il
+#   timeout è disattivato. 180 s bastano anche a scaricare dall'ESP due
+#   giorni di misure (circa 15 s a 115200 baud).
 # - ConditionPathExists=!...: "interruttore di manutenzione". Se esiste il
 #   file /boot/firmware/maintenance l'unità viene saltata (non conta come
 #   fallimento) e il Pi resta acceso, così ci si può collegare in SSH.
-#   Il file si può creare anche dal PC, inserendo la microSD: la partizione
-#   di boot è FAT32 e si legge da qualsiasi sistema operativo.
+# - Non aspettiamo la rete (network-online.target): lo scatto non ne ha
+#   bisogno e ogni secondo di boot è energia consumata.
 # - EnvironmentFile con "-" davanti: se il file non esiste non è un errore.
 
 [Unit]
-Description=Selective oneshot capture after ESP wake, then halt
-After=network-online.target
-Wants=network-online.target
+Description=Acquisizione selettiva dopo il wake dall'ESP32, poi halt
 ConditionPathExists=!/boot/firmware/maintenance
 SuccessAction=poweroff
 FailureAction=poweroff
@@ -38,10 +38,8 @@ TimeoutStartSec=180
 User=rpi5-03
 WorkingDirectory=/home/rpi5-03/progetto
 Environment=PROJECT_DIR=/home/rpi5-03/progetto
-Environment=CAPTURE_MODE=selective
 EnvironmentFile=-/home/rpi5-03/progetto/.env.systemd
 ExecStart=/bin/bash /home/rpi5-03/progetto/raspberry_pi/capture_rpi.sh --oneshot
-RemainAfterExit=no
 
 [Install]
 WantedBy=multi-user.target
