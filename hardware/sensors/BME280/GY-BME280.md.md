@@ -1,34 +1,33 @@
-# Collegamento del BME280 all'ESP32
+# Collegamento del BME280 all'ESP32-S3-CAM
 
-Per temperatura, umidità e pressione usiamo il modulo **GY-BME280**, una schedina che monta il sensore Bosch BME280 insieme a regolatore e resistenze di pull-up. Lo colleghiamo all'ESP32 in **I2C**, che richiede solo due fili di segnale.
+Per temperatura, umidità e pressione usiamo il modulo **GY-BME280**, collegato all'ESP32 via I2C. La scheda fotografata è una variante ESP32-S3-CAM N16R8 con camera OV3660 e PCB marcato `V1695` / `127294G_Y1127_231016`.
 
-## I pin del modulo
+## Pin del modulo e assegnazione firmware attuale
 
-- **VCC**: alimentazione a 3,3 V.
-- **GND**: massa.
-- **SCL** (Serial CLock): il clock del bus I2C, generato dall'ESP32. Va sul **GPIO 15** della ESP32-CAM.
-- **SDA** (Serial DAta): la linea dati, bidirezionale. Ci passano sia i comandi dell'ESP32 sia le misure del sensore. Va sul **GPIO 13** della ESP32-CAM.
-- **CSB** (Chip Select): sceglie il protocollo. Se è alto il sensore lavora in I2C, se è basso in SPI. Sul modulo c'è già una resistenza di pull-up che lo tiene alto, quindi si può lasciare scollegato. Noi comunque lo colleghiamo a 3,3 V per essere sicuri.
-- **SDO** (Serial Data Out): in I2C decide l'indirizzo del sensore sul bus. A massa l'indirizzo è `0x76`, a 3,3 V è `0x77`. Torna utile se un giorno volessimo due BME280 sullo stesso ESP32.
+- **VCC**: 3,3 V.
+- **GND**: massa comune.
+- **SDA**: GPIO47 secondo l'assegnazione attuale in `firmware/esp32/src/main.ino`.
+- **SCL**: GPIO48 secondo l'assegnazione attuale in `firmware/esp32/src/main.ino`.
+- **CSB**: collegare a 3,3 V per forzare I2C.
+- **SDO**: collegare a GND per indirizzo I2C `0x76`; a 3,3 V seleziona `0x77`.
+
+| GY-BME280 | ESP32-S3-CAM | Funzione |
+|---|---:|---|
+| VCC | 3V3 | Alimentazione |
+| GND | GND | Massa |
+| SDA | GPIO47 | Dati I2C |
+| SCL | GPIO48 | Clock I2C |
+| CSB | 3V3 | Seleziona modalità I2C |
+| SDO | GND | Indirizzo `0x76` |
 
 <div style="display: flex; justify-content: center;">
   <img src="output.png">
 </div>
 
-## Riepilogo dei collegamenti
+## Stato e limiti
 
-| Modulo GY-BME280 | Pin ESP32 | A cosa serve |
-| :--- | :--- | :--- |
-| **VCC** | **3.3V** | alimentazione |
-| **GND** | **GND** | massa comune |
-| **SCL** | **GPIO 15** | clock I2C |
-| **SDA** | **GPIO 13** | dati I2C |
-| **CSB** | **3.3V** | forza la modalità I2C |
-| **SDO** | **GND** | indirizzo I2C `0x76` |
+Questi GPIO sono configurati nel firmware, ma non sono ancora stati verificati con una prova elettrica sulla specifica revisione della scheda. I codici del PCB non hanno permesso di reperire uno schema ufficiale affidabile; verificare serigrafia, continuità e assenza di conflitti prima del cablaggio definitivo. Il pinout GPIO21/22 del vecchio schema KiCad non corrisponde all'assegnazione attuale: lo schema va aggiornato.
 
-## Da tenere a mente
+Il cavo verso la custodia esterna può essere lungo; collaudare il bus a 100 kHz e ridurre la frequenza I2C se le letture non sono stabili. Il BME280 è letto dalla libreria SparkFun in `firmware/esp32/src/main.ino`.
 
-- Lo schema KiCad e l'immagine qui sopra usano ancora GPIO 21 e 22, i pin I2C di default di un ESP32 "classico". Sulla **ESP32-CAM** che usiamo quei pin servono alla camera, quindi il BME280 va su GPIO 13 (SDA) e GPIO 15 (SCL), e lo schema va aggiornato. Le motivazioni sono nella [guida di configurazione](../../../docs/setup-risveglio.md#22-i-pin-disponibili).
-- Anche il firmware (`firmware/esp32/src/main.cpp`) usa `0x76`.
-- Il sensore andrà in una custodia stampata in 3D fuori dal box, quindi il cavo I2C sarà lungo. Va verificato che il bus funzioni bene con la lunghezza reale del cavo, ed eventualmente si abbassa la frequenza I2C.
-- Nella cartella c'è anche il [datasheet del modulo](GY-BME280%20Breakout%20Board%203in1%20sensor%20for%20temperature%20humidity%20and%20air%20pressure-GY-BME280.pdf).
+Nella cartella c'è anche il [datasheet del modulo](GY-BME280%20Breakout%20Board%203in1%20sensor%20for%20temperature%20humidity%20and%20air%20pressure-GY-BME280.pdf).

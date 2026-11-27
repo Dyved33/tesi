@@ -45,7 +45,7 @@ In entrambi i casi l'analisi delle immagini (rilevamento degli insetti o segment
  ┌──────────────────────────────────────────────────────────────────┐
  │  Box principale                                                  │
  │  ┌──────────────┐  WAKE (PC817 → pad J2)    ┌──────────────────┐ │
- │  │  ESP32-CAM   │──────────────────────────►│ Raspberry Pi 5   │ │
+ │  │  ESP32-S3-CAM   │──────────────────────────►│ Raspberry Pi 5   │ │
  │  │ camera di    │◄── ALIVE (GPIO17) ────────│ + 2 fotocamere   │ │
  │  │ rilevamento  │──► UART: misure BME ─────►│ Camera Module 3  │ │
  │  │  (sempre on) │    (solo a Pi acceso)     │ + 2ª ottica      │ │
@@ -65,7 +65,7 @@ In entrambi i casi l'analisi delle immagini (rilevamento degli insetti o segment
 
 La scelta più importante è la **divisione dei compiti tra le due schede**:
 
-- l'**ESP32-CAM** consuma poco e resta **sempre acceso**. Con la sua piccola camera di bordo sorveglia la scena e, nell'app selettiva, sveglia il Pi quando vede qualcosa. Legge anche il BME280 (temperatura, umidità, pressione): quando il Pi si accende gli manda la misura del risveglio e poi una al minuto;
+- l'**ESP32-S3-CAM** resta sempre acceso. Il firmware attuale gestisce il wake manuale e il BME280; la camera OV3660 è montata ma non è ancora inizializzata nel codice. Quando il Pi si accende, l'ESP gli invia una misura e poi una al minuto;
 - il **Raspberry Pi 5** consuma molto di più. Fa le foto, legge gli altri sensori, analizza le immagini e salva tutto. Nell'app selettiva passa la maggior parte del tempo in halt.
 
 Il BME280 sta **fuori** dal box, in una custodia stampata in 3D e collegato solo all'ESP con un cavo a tenuta. Se lo mettessimo dentro misurerebbe il calore delle schede invece dell'aria esterna.
@@ -75,7 +75,7 @@ Il BME280 sta **fuori** dal box, in una custodia stampata in 3D e collegato solo
 | BME280 (T, UR, pressione) | solo ESP32 | custodia 3D esterna |
 | Metano, umidità del suolo, sensore acqua, GPS | solo Raspberry Pi | si leggono solo a Pi acceso |
 | Due fotocamere | Raspberry Pi | supporti fissi, orientate a mano in installazione |
-| Camera di rilevamento (OV2640 o simile) | ESP32-CAM, con cavo flat | solo per decidere quando svegliare il Pi |
+| Camera di rilevamento OV3660 | ESP32-S3-CAM | montata; firmware camera/rilevamento non ancora integrato |
 
 ### Come si sveglia il Pi
 
@@ -85,9 +85,9 @@ Per riaccenderlo usiamo i **pad J2** della scheda, che sono gli stessi contatti 
 
 | Linea | Direzione | A cosa serve |
 |---|---|---|
-| WAKE | GPIO12 ESP → optoisolatore PC817 → pad J2 | "preme" il pulsante di accensione con un impulso di 200 ms |
-| ALIVE | GPIO17 Pi → GPIO2 ESP | dice all'ESP se il Pi è acceso |
-| UART | GPIO14 ESP → GPIO15 (RXD) Pi | misure del BME280 dall'ESP al Pi (solo a Pi acceso) |
+| WAKE | GPIO42 ESP → optoisolatore PC817 → pad J2 | "preme" il pulsante di accensione con un impulso di 200 ms |
+| ALIVE | GPIO17 Pi → GPIO1 ESP | dice all'ESP se il Pi è acceso |
+| UART | GPIO2 ESP → GPIO15 (RXD) Pi | misure del BME280 dall'ESP al Pi (solo a Pi acceso) |
 
 Lo schema del circuito è in [`hardware/pi5->esp32/`](hardware/pi5-%3Eesp32/circuito.png). Tutti i dettagli sono in [configurazione e risveglio](docs/setup-risveglio.md).
 
@@ -117,7 +117,7 @@ la camera dell'ESP vede un evento (in futuro: anche forecaster + decider)
 
 La seconda ottica va scelta **prima** di progettare il box, perché da lei dipendono ingombri, finestra trasparente e fissaggi.
 
-**ESP32:** ESP32-CAM con pinout AI-Thinker, con la camera collegata al connettore a flat della scheda. La scheda non viene modificata: i suoi pin laterali vanno a una board di collegamento con il Pi. La camera dell'ESP serve solo a capire *quando* svegliare il Pi: le foto per il dataset le fanno le fotocamere del Pi. Pin e collegamenti sono in [configurazione e risveglio](docs/setup-risveglio.md#2-esp32-cam-camera-bme280-e-collegamento-con-il-pi).
+**ESP32:** variante ESP32-S3-CAM N16R8 con camera OV3660 e due porte USB-C; PCB marcato `V1695` / `127294G_Y1127_231016`. Il firmware attuale non inizializza la camera. I GPIO proposti sono WAKE 42, ALIVE 1, UART TX 2, BME280 SDA/SCL 47/48: non sono ancora collaudati elettricamente. Dettagli nella [guida di configurazione](docs/setup-risveglio.md#2-esp32-s3-cam-bme280-e-collegamento-con-il-pi).
 
 **Sensori sul Pi:**
 
@@ -168,10 +168,10 @@ All'inizio useremo il Wi-Fi del laboratorio, poi un modem 4G. Acquisizione e sal
 | `raspberry_pi/systemd/`         | unità systemd e modello delle variabili d'ambiente                                 |
 | `raspberry_pi/data/`            | `sensors.csv`, il file in cui finiranno le misure                                  |
 | `raspberry_pi/requirements.txt` | dipendenze Python                                                                  |
-| `firmware/esp32/`               | firmware PlatformIO per l'ESP32-CAM (camera, wake, BME280, UART)                 |
+| `firmware/esp32/`               | firmware PlatformIO per ESP32-S3-CAM (wake, BME280, UART; camera non ancora inizializzata)                 |
 | `hardware/`                     | schemi KiCad: collegamento Pi–ESP e sensore BME280                                 |
 
-Il codice è ancora a livello di **prototipo**. Il firmware ESP acquisisce i frame della camera, legge il BME280, manda le misure al Pi via UART e sa svegliare il Pi, ma non ha ancora l'algoritmo di rilevamento, forecaster e decider. Sul Pi ci sono i primi script di scatto e lettura sensori, ma pin e sensori non sono ancora la configurazione di campo. I problemi noti sono in [issues.md](issues.md).
+Il codice è ancora a livello di **prototipo**. Il firmware ESP gestisce WAKE, legge il BME280 e invia le misure al Pi via UART; la camera OV3660 non è ancora inizializzata nel firmware. Mancano l'algoritmo di rilevamento, forecaster e decider. Sul Pi ci sono i primi script di scatto e lettura sensori, ma pin e sensori non sono ancora la configurazione di campo. I problemi noti sono in [issues.md](issues.md).
 
 Per provare il software del Pi:
 
@@ -191,23 +191,23 @@ PYENV_ROOT=$PWD/.venv bash raspberry_pi/capture_rpi.sh --oneshot   # una foto + 
 - [x] Raspberry Pi 5 configurato (OS, hostname `rpi5-03`, SSH, rete)
 - [x] Camera Module 3 provata con `rpicam-still`
 - [x] Strategia halt + WAKE/ALIVE definita
-- [x] Schema del circuito di risveglio con optoisolatore PC817
-- [x] Schema di collegamento del BME280 all'ESP32
+- [ ] Schema concettuale WAKE con PC817 presente; da aggiornare ai pin della ESP32-S3-CAM
+- [ ] Aggiornare schema KiCad BME280 e circuito Pi–ESP ai GPIO proposti della ESP32-S3-CAM
 - [x] Prima versione del firmware di risveglio e degli script di scatto e sensori
 
 **Da fare:**
 
 - [x] Corretti i problemi bloccanti del flusso di scatto ([issues.md](issues.md))
-- [x] Firmware compilato con PlatformIO (board `esp32cam`)
+- [x] Firmware compilato con PlatformIO nell’ambiente `esp32s3_cam` (build host; board fisica non ancora collaudata)
 - [ ] Provare il firmware sulla scheda e tutto il flusso sul Pi vero
 - [ ] Correggere i problemi importanti rimasti in [issues.md](issues.md)
 - [ ] Scegliere seconda fotocamera e ottica, prove al banco (pixel sul bersaglio)
-- [x] Assegnati i pin della ESP32-CAM senza modificare la scheda (WAKE, ALIVE, UART, BME280)
+- [x] Proposti i GPIO per ESP32-S3-CAM (WAKE 42, ALIVE 1, UART 2, I2C 47/48); verifica hardware ancora da fare
 - [ ] Board di collegamento ESP–Pi (PC817, resistenze, connettori)
-- [ ] BME280 nella custodia esterna; aggiornare gli schemi KiCad (WAKE su GPIO12, ALIVE su GPIO2, UART su GPIO14, BME280 su GPIO13/15)
+- [ ] BME280 nella custodia esterna; aggiornare gli schemi KiCad ai GPIO proposti (WAKE 42, ALIVE 1, UART 2, BME280 47/48) dopo verifica hardware
 - [ ] Montare e provare il circuito di risveglio; verificare che ESP e BME restino alimentati con il Pi in halt
-- [x] Firmware unico: camera, wake manuale, lettura BME280 e invio al Pi (UART)
-- [ ] Firmware: rilevamento con la camera dell'ESP (`eventDetected()`)
+- [x] Firmware `.ino`: wake manuale, lettura BME280 e invio al Pi (UART); camera non ancora integrata
+- [ ] Firmware: inizializzare OV3660 e implementare rilevamento eventi
 - [ ] Firmware: forecaster e decider
 - [ ] Programma sul Pi che riceve le misure dell'ESP e le salva nel database
 - [ ] Collegare i sensori al Pi (modelli, ADC, connettori a tenuta)

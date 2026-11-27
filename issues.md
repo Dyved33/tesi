@@ -101,19 +101,16 @@ Non si controllavano qualità del fix e checksum, e si riconosceva solo `$GPGGA`
 
 **Ancora da fare:** salvare `fix_quality` e `hdop` anche nel CSV e nel JSON (vedi #8).
 
-### ✅ 11. Il GPIO14 dell'ESP32 emette un segnale PWM all'avvio
-**Dove:** `firmware/esp32/src/main.cpp` (`PIN_WAKE`)
+### ◐ 11. Pin WAKE da verificare sulla nuova ESP32-S3-CAM
 
-Sull'ESP32 alcuni pin, tra cui il GPIO14, mandano un segnale PWM durante il boot, prima che `setup()` li porti a LOW. Ogni reset o brown-out dell'ESP potrebbe quindi chiudere J2 tramite il PC817 e accendere il Pi senza motivo. Il GPIO14 è anche il clock della microSD sulla ESP32-CAM.
-
-**Correzione:** WAKE è stato spostato sul GPIO12. È un pin di strapping che al reset deve essere basso (altrimenti l'ESP non parte), e il LED del PC817 verso massa lo garantisce; non emette segnali al boot. Il GPIO14 ora fa da TX verso il Pi, dove il PWM produce al massimo qualche byte spurio. Resta da controllare con l'oscilloscopio che durante il reset il GPIO12 stia basso, e va aggiornato lo schema KiCad in `hardware/pi5->esp32/`. Dettagli in `docs/setup-risveglio.md`, sezione 2.
+La nota originaria riguardava una ESP32-CAM AI-Thinker e non si applica alla scheda fotografata nel progetto. La board ora identificata è una variante ESP32-S3-CAM N16R8 (PCB `V1695` / `127294G_Y1127_231016`). Il firmware propone WAKE su GPIO42; livello al reset e comportamento dell'optoisolatore vanno ancora misurati sulla scheda reale. Le vecchie indicazioni GPIO12/GPIO14 sono obsolete.
 
 ---
 
 ## 🟡 Minori
 
 ### ✅ 12. API Adafruit CircuitPython BME280 obsoleta
-Superato: il BME280 è collegato solo all'ESP32; il lettore Python del Pi è stato rimosso e il firmware usa la libreria Adafruit BME280 per Arduino.
+Superato: il BME280 è collegato solo all'ESP32; il lettore Python del Pi è stato rimosso. Il firmware usa la libreria SparkFun BME280 per Arduino.
 
 ### ✅ 13. Indirizzo BME280 incoerente
 Il driver ESP32 usa l'indirizzo predefinito `0x76`, come nello schema in `hardware/sensors/BME280/` (SDO a GND).
@@ -153,12 +150,11 @@ In `capture_client.py` la pausa parte dopo scatto e GPS (fino a ~10 s), quindi i
 ### 23. `--warmup-ms` e `--timeout-ms` vengono semplicemente sommati
 Le due opzioni finiscono entrambe in `-t`, quindi non ha senso tenerle separate. L'help dice "passed to libcamera-still", ma non è così.
 
-### ◐ 24. Firmware ESP32
-- ✅ `camera_config_t config = {};`: i campi non assegnati ora sono azzerati.
-- ✅ Usati i nomi nuovi `pin_sccb_sda/scl`.
-- ✅ Se la camera non si inizializza il firmware non si blocca più: il rilevamento resta disattivato, ma BME280, UART e comando `w` funzionano. Lo stesso vale se manca il BME280, che il firmware riprova a inizializzare ogni 10 s.
-- ⏳ `waitForAlive()` blocca il `loop()` per fino a 15 s: nel frattempo non si acquisiscono frame e non si leggono i comandi dal monitor seriale.
-- ⏳ `secrets.h.example` e `USE_WIFI` non sono usati.
+### ◐ 24. Firmware ESP32-S3-CAM
+- La camera OV3660 è montata, ma il firmware corrente non la inizializza e non implementa il rilevamento.
+- `waitForAlive()` blocca il `loop()` fino a 15 s; durante l'attesa non vengono gestiti altri comandi.
+- `secrets.h.example` e `USE_WIFI` non sono usati.
+- I GPIO configurati per la variante S3-CAM sono candidati e vanno verificati sulla board reale.
 
 ### ✅ 25. `platformio.ini`: flag `-mfix=fp`
 Non ci risulta un flag GCC Xtensa con questo nome (esiste `-mfix-esp32-psram-cache-issue`).
@@ -166,18 +162,16 @@ Non ci risulta un flag GCC Xtensa con questo nome (esiste `-mfix-esp32-psram-cac
 **Correzione:** l'abbiamo verificato compilando: il compilatore risponde `unrecognized command-line option '-mfix=fp'` e la build fallisce. Il flag è stato tolto da `platformio.ini`.
 
 ### 26. Back-powering tramite ALIVE
-Con `gpio=17=op,dh` il Pi tiene GPIO17 alto. Se l'ESP non è alimentato, quei 3,3 V entrano nel GPIO2 (prima GPIO13) e, attraverso i diodi di protezione interni, arrivano al suo rail di alimentazione. Il pulldown da 10 kΩ va verso massa e non limita questa corrente. Conviene una resistenza in serie (es. 1 kΩ) o un secondo optoisolatore.
+Con `gpio=17=op,dh` il Pi tiene GPIO17 alto. Se l'ESP non è alimentato, quei 3,3 V entrano nel GPIO1 (ALIVE nella mappa attuale) e, attraverso i diodi di protezione interni, possono raggiungere il suo rail di alimentazione. Il pulldown da 10 kΩ va verso massa e non limita questa corrente. La soluzione elettrica va definita prima del collegamento e verificata al banco.
 
-Lo stesso rischio c'è, al contrario, sulla UART verso il Pi: una linea TX a riposo è alta e alimenterebbe il Pi in halt attraverso il suo RXD. Il firmware tiene la UART chiusa finché ALIVE è basso; in più è previsto 1 kΩ in serie sul filo ESP TX → Pi RXD. Va misurato al banco (vedi `docs/setup-risveglio.md`, sezione 4, prova 9).
+Lo stesso rischio c'è, al contrario, sulla UART verso il Pi: una linea TX a riposo è alta e alimenterebbe il Pi in halt attraverso il suo RXD. Il firmware tiene la UART chiusa finché ALIVE è basso; in più è previsto 1 kΩ in serie sul filo ESP GPIO2 TX → Pi RXD. Va misurato al banco (vedi `docs/setup-risveglio.md`, sezione 4, prova 9).
 
-### ◐ 27. Il firmware non è stato compilato dopo le ultime modifiche
+### ◐ 27. Firmware ESP32-S3-CAM: build completata, test hardware da fare
 **Dove:** `firmware/esp32/`
 
-Nelle ultime revisioni abbiamo cambiato solo i commenti di `main.cpp` e `platformio.ini` (abbiamo verificato in automatico che il codice, tolti i commenti, sia identico). Sulla macchina della revisione però PlatformIO non è installato, quindi il firmware non è stato compilato. Non sappiamo nemmeno se compilasse prima, perché il repository non contiene un log di build.
+La build `pio run -e esp32s3_cam` è riuscita con PlatformIO 8.0.0, Arduino-ESP32 3.3.12 e SparkFun BME280 2.0.9. Uso riportato: RAM 7,4% (24.248 byte), flash 10,6% (334.364 byte della partizione applicativa).
 
-**Aggiornamento (20 novembre 2026):** il firmware (board `esp32cam`) compila senza errori né warning con PlatformIO, piattaforma espressif32 8.0.0 (arduino-esp32 3.3.12) e SparkFun BME280 2.0.9. Uso: RAM 11 %, flash 12 %. Compilando abbiamo anche scoperto che la versione precedente **non poteva compilare**, per il flag `-mfix=fp` (#25).
-
-**Cosa resta:** caricarlo sulla scheda e ripetere le prove con i comandi `w` e `r` e con la UART verso il Pi.
+**Cosa resta:** caricare sulla scheda reale e collaudare BME280, WAKE, ALIVE e UART. La compilazione non verifica il pinout proposto né l'inizializzazione della PSRAM sulla variante fisica.
 
 ### 28. Valutare Picamera2 al posto di `rpicam-still`
 **Dove:** `raspberry_pi/smartcam/capture_client.py`

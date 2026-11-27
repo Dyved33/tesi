@@ -5,9 +5,9 @@ Qui spieghiamo cosa fa ogni file sorgente e, soprattutto, **cosa non fa ancora**
 ## Il quadro generale
 
 ```text
-ESP32-CAM (prototipo)                  Raspberry Pi 5 (prototipo)
-camera di bordo → eventDetected() ┐    Camera Module 3 → JPG
-comando seriale 'w' ──────────────┴─►  WAKE (J2): il Pi si accende
+ESP32-S3-CAM (prototipo)                  Raspberry Pi 5 (prototipo)
+comando seriale 'w' ──────────────────►  WAKE (J2): il Pi si accende
+camera OV3660 (non inizializzata)         Camera Module 3 → JPG
 legge ALIVE ◄────────────────────────  GPIO17 alto quando il Pi è acceso
 BME280 → misura al risveglio          sensori del Pi → riga CSV
 misure → UART verso il Pi ──────────►  (ricezione ancora da scrivere)
@@ -18,60 +18,33 @@ Ad oggi:
 
 - il risveglio del Pi da parte dell'ESP è scritto e si può provare a mano;
 - sul Pi si possono fare foto e leggere i sensori (con i limiti descritti sotto);
-- l'ESP acquisisce i frame della camera, sveglia il Pi (a mano, per ora) e gli manda le misure del BME280 via UART, ma sul Pi nessun programma le riceve ancora;
+- l'ESP sveglia il Pi a mano e gli manda le misure del BME280 via UART; la camera non è ancora inizializzata nel firmware e sul Pi nessun programma riceve ancora le misure;
 - **mancano** il rilevamento sulla camera dell'ESP, forecaster e decider, il database, la modalità continuativa vera e propria e l'analisi delle immagini.
 
 ---
 
 ## Firmware ESP32: `firmware/esp32/`
 
-Il firmware gira su una **ESP32-CAM** (pinout AI-Thinker) ed è scritto con il framework Arduino su PlatformIO. Collegamenti, scelta dei pin e protocollo con il Pi sono descritti nella [guida di configurazione](setup-risveglio.md#2-esp32-cam-camera-bme280-e-collegamento-con-il-pi); qui spieghiamo come è organizzato il codice.
+La scheda fotografata è una variante ESP32-S3-CAM con modulo N16R8 e camera OV3660. Il firmware attuale è `firmware/esp32/src/main.ino`, compilato con PlatformIO e l'ambiente `esp32s3_cam`. La configurazione usa il profilo generico `esp32-s3-devkitc-1`, 16 MB di flash e PSRAM OPI; la variante PCB non ha uno schema ufficiale verificato nel repository.
 
-### Cosa fa
+### Stato e pin configurati
 
-Sulla scheda gira un unico firmware con tre funzioni:
+Il firmware attuale non avvia la camera e non implementa il rilevamento. Gestisce il wake manuale, il sensore BME280 e l'invio UART al Pi. I GPIO attualmente impostati sono candidati da verificare sul cablaggio prima di alimentare il circuito:
 
-1. **risveglio su evento**: acquisisce di continuo frame dalla camera di bordo e, quando vede qualcosa (ad esempio un insetto che passa davanti alla camera), sveglia il Pi;
-2. **risveglio manuale**, per le prove: comando `w` dal monitor seriale USB;
-3. **misure del BME280**: quando il Pi si accende fa una misura, aspetta che il Pi finisca il boot e gliela manda via UART; poi gli manda una misura al minuto finché resta acceso.
+| Segnale | GPIO ESP32-S3 |
+|---|---:|
+| WAKE tramite PC817 | 42 |
+| ALIVE dal GPIO17 Pi | 1 |
+| UART TX verso RXD Pi | 2 |
+| BME280 SDA / SCL | 47 / 48 |
 
-Il rilevamento vero e proprio **non c'è ancora**: `eventDetected()` acquisisce il frame ma restituisce sempre `false`.
+`setup()` configura WAKE inattivo, ALIVE come ingresso con pulldown, apre I2C a 100 kHz e tenta di inizializzare il BME280. `loop()` riprova l'inizializzazione ogni 10 s, controlla ALIVE e processa i comandi seriali: `w` chiede il wake, `r` richiede una misura. L'attesa di ALIVE dopo WAKE è bloccante fino a 15 s.
 
-### Come è organizzato `src/main.cpp`
-
-Il file è diviso in blocchi, separati da commenti:
-
-| Blocco | Funzioni | Cosa fanno |
-|---|---|---|
-| Risveglio del Pi | `piAlive()`, `pulseJ2()`, `waitForAlive()`, `ensurePiOn()`, `onEvent()` | leggono ALIVE, danno l'impulso di 200 ms su WAKE e aspettano che il Pi si accenda. `onEvent()` è il punto d'ingresso comune a evento e comando `w`, e applica un cooldown di 30 s |
-| Camera e rilevamento | `initCamera()`, `eventDetected()` | configurano la camera (pin AI-Thinker, JPEG, risoluzione in base alla PSRAM) e acquisiscono un frame. In `eventDetected()` va scritto l'algoritmo di rilevamento |
-| BME280 | `initBme()`, `serviceBme()`, `takeForcedMeasurement()`, `measure()` | inizializzano il sensore (riprovando ogni 10 s se non risponde) e fanno una misura in forced mode |
-| UART verso il Pi | `servicePiLink()`, `sendReading()` | seguono ALIVE: quando sale aprono la UART e fanno la misura del risveglio, dopo `PI_BOOT_DELAY_MS` la mandano, poi mandano una misura ogni `BME_PERIOD_MS`; quando scende chiudono la UART |
-
-In cima al file ci sono tutte le costanti da cui dipende il comportamento: pin, indirizzo e frequenza I2C, ritardo di invio dopo il boot del Pi, periodo delle misure, durata dell'impulso, timeout e cooldown. Per cambiare un collegamento o una tempistica basta modificare lì.
-
-### Il ciclo principale
-
-`setup()` porta WAKE basso (così il PC817 non chiude J2 per sbaglio), configura ALIVE come ingresso, lascia chiusa la UART verso il Pi, apre il bus I2C del BME280 e inizializza la camera. Se la camera non parte, il firmware lo scrive nel log e continua senza rilevamento.
-
-`loop()` gira circa 5 volte al secondo e a ogni giro:
-
-1. `serviceBme()`: se il BME280 non è pronto, prova a inizializzarlo;
-2. `servicePiLink()`: gestisce UART e invio delle misure in base ad ALIVE;
-3. `eventDetected()`: acquisisce un frame e, se c'è un evento, chiama `onEvent()`;
-4. legge i comandi dal monitor seriale USB: `w` per il wake manuale, `r` per stampare una misura del BME280.
-
-### Limiti noti
-
-- ALIVE alto significa solo che il GPIO17 del Pi è alto, non che Linux abbia finito il boot: per questo la misura del risveglio parte dopo un ritardo fisso, da tarare sul Pi vero.
-- La UART va solo dall'ESP al Pi (non avanzano pin per la ricezione): il Pi non può chiedere misure, le riceve e basta. Se il programma sul Pi parte dopo l'invio, la misura del risveglio va persa.
-- L'ESP non ha un orologio vero: ogni misura viaggia con la sua "età" in millisecondi e l'ora la ricostruisce il Pi.
-- Durante l'attesa di ALIVE (fino a 15 s) il `loop()` è bloccato ([issues.md #24](../issues.md)).
-- Il firmware compila con PlatformIO senza warning, ma **non è ancora stato provato sulla scheda** ([issues.md #27](../issues.md)).
+Il BME280 usa la libreria SparkFun in forced mode, all'indirizzo `0x76` (SDO a massa). La UART si apre quando ALIVE sale, attende 60 s e invia una riga, poi invia una misura ogni minuto. Il formato implementato è `BME,uptime_ms,temp_C,humidity_percent,pressure_hPa`; il ricevitore sul Pi non è ancora implementato. La velocità UART è 9600 baud.
 
 ### `platformio.ini`
 
-Board `esp32cam`, framework Arduino, PSRAM attiva, tabella delle partizioni `huge_app.csv` (lascia più spazio al programma), monitor a 115200 baud. L'unica dipendenza esterna è la libreria SparkFun BME280, che PlatformIO scarica da sola alla prima compilazione. Non usiamo la Adafruit BME280 perché va in conflitto con il driver della camera (dettagli nella [guida di configurazione](setup-risveglio.md#24-bme280)).
+Compilazione: `pio run -e esp32s3_cam`; caricamento: `pio run -e esp32s3_cam -t upload`. La tabella partizioni è `huge_app.csv`; la libreria esterna è SparkFun BME280. La compilazione PlatformIO è riuscita; il firmware non è ancora stato caricato e provato sulla board identificata.
 
 ### `include/secrets.h.example`
 
@@ -148,7 +121,7 @@ Apre la seriale e aspetta una frase GGA con un fix valido. Il parsing lo fa la l
 
 ### Driver BME280 dell'ESP32
 
-Il vecchio modulo Python per leggere il BME280 sul Pi è stato rimosso: il sensore di progetto è collegato soltanto all'ESP32. La lettura è in `firmware/esp32/src/main.cpp` (libreria SparkFun BME280).
+Il vecchio modulo Python per leggere il BME280 sul Pi è stato rimosso: il sensore di progetto è collegato soltanto all'ESP32. La lettura è in `firmware/esp32/src/main.ino` (libreria SparkFun BME280).
 
 ### `smartcam/photo_metadata.py`
 
@@ -170,8 +143,7 @@ All'inizio di ogni file c'è una sezione **"Provenienza"** che distingue le part
 
 | Parte | Fonte |
 |---|---|
-| Pin e configurazione della camera in `main.cpp` | esempio *CameraWebServer* di Espressif (`camera_pins.h`, `CameraWebServer.ino`), Apache-2.0 |
-| Inizializzazione e misura del BME280 in `main.cpp` | esempi `Example2_I2CAddress` e `Example6_LowPower` della libreria [SparkFun BME280](https://github.com/sparkfun/SparkFun_BME280_Arduino_Library), MIT |
+| | Inizializzazione e misura del BME280 in `main.ino` | esempi `Example2_I2CAddress` e `Example6_LowPower` della libreria [SparkFun BME280](https://github.com/sparkfun/SparkFun_BME280_Arduino_Library), MIT |
 | Parsing NMEA (`gps_reader.py`) | libreria [pynmea2](https://github.com/Knio/pynmea2), MIT |
 | Lettura MCP3008 (`sensors.py`) | classe `MCP3008` di [gpiozero](https://gpiozero.readthedocs.io/en/stable/api_spi.html), BSD |
 | Ingressi digitali (`sensors.py`) | documentazione gpiozero e RPi.GPIO |
@@ -191,6 +163,6 @@ Abbiamo controllato, script per script, se una libreria o un esempio ufficiale p
 | `capture_client.py` | chiamata a `rpicam-still` con `subprocess` | **non sostituita**: [Picamera2](https://github.com/raspberrypi/picamera2) sarebbe l'alternativa ufficiale, ma richiede di riscrivere lo scatto e provarlo sulla camera vera ([issues.md #28](../issues.md)) |
 | `photo_metadata.py` | JSON sidecar | **tenuto**: è codice minimo basato sulla libreria standard |
 | `capture_rpi.sh`, unità systemd | | niente da sostituire |
-| `main.cpp` | logica WAKE/ALIVE | niente da sostituire. Per il BME280 usiamo la libreria [SparkFun BME280](https://github.com/sparkfun/SparkFun_BME280_Arduino_Library) invece di scrivere un driver (la Adafruit va in conflitto con il driver della camera) |
+| `main.ino` | logica WAKE/ALIVE | niente da sostituire. Per il BME280 usiamo la libreria [SparkFun BME280](https://github.com/sparkfun/SparkFun_BME280_Arduino_Library) invece di scrivere un driver (la Adafruit va in conflitto con il driver della camera) |
 
 **Regola per il futuro:** quando copiamo o adattiamo codice da internet, aggiungiamo subito nel file un commento con l'URL, l'autore o il progetto, la licenza e cosa abbiamo modificato.
