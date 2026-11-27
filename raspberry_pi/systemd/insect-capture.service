@@ -36,11 +36,11 @@ FailureAction=poweroff
 Type=oneshot
 TimeoutStartSec=180
 User=rpi5-03
-WorkingDirectory=/home/rpi5-03/tesi
-Environment=PROJECT_DIR=/home/rpi5-03/tesi
+WorkingDirectory=/home/rpi5-03/progetto
+Environment=PROJECT_DIR=/home/rpi5-03/progetto
 Environment=CAPTURE_MODE=selective
-EnvironmentFile=-/home/rpi5-03/tesi/.env.systemd
-ExecStart=/bin/bash /home/rpi5-03/tesi/raspberry_pi/capture_rpi.sh --oneshot
+EnvironmentFile=-/home/rpi5-03/progetto/.env.systemd
+ExecStart=/bin/bash /home/rpi5-03/progetto/raspberry_pi/capture_rpi.sh --oneshot
 RemainAfterExit=no
 
 [Install]

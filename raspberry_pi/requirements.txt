@@ -1,10 +1,10 @@
-# Dipendenze Python del package smartcam (Raspberry Pi OS Bookworm, Python 3.11).
-# Installazione nel virtualenv:  pip install -r raspberry_pi/requirements.txt
-#
-# Nota: gpiozero è già installato di sistema su Raspberry Pi OS; se si usa un
-# virtualenv conviene crearlo con --system-site-packages, così si usano anche
-# lgpio e picamera2 di sistema (sul Pi 5 lgpio è il backend GPIO consigliato).
+# Dipendenze Python usate dagli script smartcam.
+# Installare nel virtualenv con:
+#   python3 -m venv --system-site-packages .venv
+#   .venv/bin/pip install -r raspberry_pi/requirements.txt
+# --system-site-packages consente di usare gpiozero e il backend GPIO forniti
+# da Raspberry Pi OS. La camera viene chiamata tramite rpicam-still, non Picamera2.
 
 pyserial>=3.5              # seriale del GPS
 pynmea2>=1.19              # parsing delle frasi NMEA
-gpiozero>=2.0              # GPIO e ADC MCP3008
+gpiozero>=2.0              # GPIO e ADC MCP3008; backend GPIO fornito dal sistema

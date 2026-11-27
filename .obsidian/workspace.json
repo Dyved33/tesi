@@ -4,17 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "f2d92a385958cf71",
+        "id": "85400a6b24e39466",
         "type": "tabs",
         "children": [
           {
-            "id": "784215eb49f123eb",
+            "id": "cf45afce0f3b2ba2",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
+              "type": "markdown",
+              "state": {
+                "file": "docs/setup-risveglio.md",
+                "mode": "source",
+                "source": false
+              },
               "icon": "lucide-file",
-              "title": "New tab"
+              "title": "setup-risveglio"
             }
           }
         ]
@@ -79,8 +83,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 300
   },
   "right": {
     "id": "ca983fd078c1913b",
@@ -185,11 +188,24 @@
       "bases:Create new base": false
     }
   },
-  "active": "784215eb49f123eb",
+  "active": "cf45afce0f3b2ba2",
   "lastOpenFiles": [
+    "firmware/esp32/platformio.ini",
+    "db/init.sql",
+    "db",
+    "configurazioni_fisiche/sensors/BME280",
+    "configurazioni_fisiche/sensors",
+    "configurazioni_fisiche/pi5->esp32",
+    "configurazioni_fisiche",
+    "docs/setup-risveglio.md",
+    "hardware/pi5->esp32/circuito.png",
+    "docs/img/idea-prof_installazione-in-campo.jpeg",
+    "hardware/sensors/BME280/GY-BME280 Breakout Board 3in1 sensor for temperature humidity and air pressure-GY-BME280.pdf",
+    "firmware/esp32/src/main/main.ino",
+    "firmware/esp32/src/main",
+    "firmware/esp32/src/main.ino",
     "more.md",
     "issues.md",
-    "docs/setup-risveglio.md",
     "docs/guida-codice.md",
     "README.md"
   ]

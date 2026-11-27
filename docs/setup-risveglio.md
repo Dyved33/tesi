@@ -45,9 +45,50 @@ Va verificato con il multimetro cosa fa il pin durante boot, funzionamento, speg
 
 ### Servizio di scatto (app selettiva)
 
-L'unità [`insect-capture.service`](../raspberry_pi/systemd/insect-capture.service) a ogni boot fa una foto più una lettura dei sensori e poi spegne il Pi. Lo spegne **in ogni caso**: sia se va tutto bene, sia se qualcosa fallisce, sia se lo script si blocca per più di 3 minuti. I percorsi sono quelli del nostro Pi (`/home/rpi5-03/tesi`): prima di installarla vanno controllati utente, directory e file d'ambiente.
+L'unità [`insect-capture.service`](../raspberry_pi/systemd/insect-capture.service) a ogni boot fa una foto più una lettura dei sensori e poi spegne il Pi. Lo spegne **in ogni caso**: sia se va tutto bene, sia se qualcosa fallisce, sia se lo script si blocca per più di 3 minuti. La configurazione qui sotto assume utente `rpi5-03` e progetto in `/home/rpi5-03/progetto`; se hai scelto un altro utente o percorso, sostituiscili coerentemente anche in `insect-capture.service` e `.env.systemd`.
+
+**Prima configurazione via microSD e SSH.** I comandi seguenti assumono che Raspberry Pi OS sia già scritto sulla scheda, che l'utente sia `rpi5-03` e che la rete Wi-Fi sia configurata. Dal PC, con la scheda inserita, crea un file vuoto chiamato `maintenance` nella partizione `bootfs` (su Raspberry Pi OS recenti può apparire come `bootfs`). Abilita SSH nella configurazione dell'immagine oppure, se il tuo sistema supporta il metodo file, crea lì anche un file vuoto `ssh`. Espelli la scheda in sicurezza e avvia il Pi.
+
+Dal terminale del PC collegati al Pi (usa l'indirizzo IP al posto del nome se `raspberrypi.local` non viene trovato):
 
 ```bash
+ssh rpi5-03@raspberrypi.local
+```
+
+Sul Pi, prepara la directory del progetto e l'ambiente Python. Questo presume che il repository sia già presente in `/home/rpi5-03/progetto`; se non lo è, copialo/clonalo prima in quella directory.
+
+```bash
+mkdir -p /home/rpi5-03/progetto
+cd /home/rpi5-03/progetto/raspberry_pi
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Il virtualenv usa i pacchetti di Raspberry Pi OS (in particolare `gpiozero` e il backend GPIO) e installa `pyserial` e `pynmea2` da `requirements.txt`. La fotocamera viene chiamata tramite il comando di sistema `rpicam-still`.
+
+Sempre sul Pi, dalla root del progetto, crea il file locale d'ambiente partendo dall'esempio e controllane il contenuto:
+
+```bash
+cd /home/rpi5-03/progetto
+cp raspberry_pi/systemd/.env.systemd.example .env.systemd
+nano .env.systemd
+```
+
+Verifica che contenga almeno `CAPTURE_MODE=selective`, `CAPTURE_INTERVAL=30`, `PYENV_ROOT=/home/rpi5-03/progetto/raspberry_pi/.venv` e `PROJECT_DIR=/home/rpi5-03/progetto`. Lascia commentate le righe `DAILY_WINDOW_START`, `DAILY_WINDOW_END` e `SENSOR_INTERVAL`: sono segnaposto per funzioni non implementate. In `nano`, salva con Ctrl+O, Invio ed esci con Ctrl+X.
+
+Con `maintenance` presente il servizio viene saltato e il Pi resta disponibile. Prova manualmente il flusso dalla root del progetto:
+
+```bash
+cd /home/rpi5-03/progetto
+bash raspberry_pi/capture_rpi.sh --oneshot
+```
+
+Questo prova una foto e una lettura sensori; per la prova completa servono camera e sensori collegati. Non installare/abilitare il servizio durante la manutenzione: il servizio va attivato solo dopo il collaudo, perché spegne il Pi dopo ogni avvio.
+
+Quando il collaudo è concluso e vuoi attivare il ciclo selettivo, rimuovi prima il file `maintenance` dalla partizione `bootfs` (dal PC) oppure dal Pi, poi installa e abilita il servizio:
+
+```bash
+cd /home/rpi5-03/progetto
 sudo cp raspberry_pi/systemd/insect-capture.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable insect-capture.service
